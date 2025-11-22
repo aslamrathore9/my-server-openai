@@ -1,0 +1,10 @@
+{
+  "name": "openai-realtime-server",
+  "type": "module",
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "node-fetch": "^3.3.2",
+    "openai": "^6.9.1"
+  }
+}
