@@ -13,18 +13,13 @@ app.get("/session-token", async (req, res) => {
         "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({
-        // Only instructions, voice, or other allowed params
-        instructions: "You are an English tutor who corrects grammar and responds naturally.",
-        voice: "alloy",
-        output_audio_format: "pcm16"
-      })
+      body: JSON.stringify({}) // ✅ empty body is correct
     });
 
     const data = await response.json();
 
     if (response.ok) {
-      res.json(data); // this includes client_secret.value
+      res.json(data); // contains client_secret.value
     } else {
       console.error("OpenAI error:", data);
       res.status(500).json({ error: data.error });
