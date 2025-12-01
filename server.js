@@ -25,16 +25,16 @@ const openai = new OpenAI({
 
 // TRANSCRIBE ENDPOINT
 app.post('/transcribe', upload.single('audio'), async (req, res) => {
+  console.log('File info:', req.file);
+  
   try {
-    // Ensure a .wav extension (critical for OpenAI/whisper on some platforms)
-	  console.log('File info:', req.file); // <---- ADD THIS LINE HERE
+    // Ensure .wav extension (critical for OpenAI Whisper)
     const oldPath = req.file.path;
     const newPath = oldPath + '.wav';
     fs.renameSync(oldPath, newPath);
 
     const fileStream = fs.createReadStream(newPath);
 
-    // Call OpenAI Whisper
     const openaiResponse = await openai.audio.transcriptions.create({
       file: fileStream,
       model: 'whisper-1',
@@ -42,8 +42,38 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
 
     fs.unlinkSync(newPath);
     res.json({ text: openaiResponse.text });
-
   } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// TTS (Text-to-Speech) ENDPOINT
+app.post('/tts', async (req, res) => {
+  try {
+    const { model = "tts-1", voice = "alloy", input } = req.body;
+
+    if (!input) {
+      return res.status(400).json({ error: "Text input is required" });
+    }
+
+    // Call OpenAI TTS API
+    const mp3 = await openai.audio.speech.create({
+      model: model,
+      voice: voice,
+      input: input,
+    });
+
+    // Convert response to buffer
+    const buffer = Buffer.from(await mp3.arrayBuffer());
+
+    // Set headers for audio response
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Length', buffer.length);
+
+    // Send audio data
+    res.send(buffer);
+  } catch (e) {
+    console.error('TTS error:', e);
     res.status(500).json({ error: e.message });
   }
 });
@@ -120,3 +150,4 @@ CONVERSATION RULES:
 app.listen(port, () => {
   console.log(`Server live on port ${port}`);
 });
+
