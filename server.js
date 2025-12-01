@@ -15,7 +15,7 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// File upload
+// File uploade
 const upload = multer({ dest: "uploads/" });
 
 // New OpenAI client
