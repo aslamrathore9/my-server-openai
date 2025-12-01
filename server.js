@@ -1,10 +1,12 @@
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const multer = require('multer');
-const { Configuration, OpenAIApi } = require('openai');
-const fs = require('fs');
-const path = require('path');
+import dotenv from "dotenv";
+dotenv.config();
+
+import express from "express";
+import cors from "cors";
+import multer from "multer";
+import fs from "fs";
+import path from "path";
+import OpenAI from "openai";
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -13,35 +15,37 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// For handling audio uploads
-const upload = multer({ dest: 'uploads/' });
+// File upload
+const upload = multer({ dest: "uploads/" });
 
-const openai = new OpenAIApi(new Configuration({
-  apiKey: process.env.OPENAI_API_KEY,
-}));
+// New OpenAI client
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
 
 // TRANSCRIBE ENDPOINT
-app.post('/transcribe', upload.single('audio'), async (req, res) => {
+app.post("/transcribe", upload.single("audio"), async (req, res) => {
   try {
     const audioFilePath = req.file.path;
-    const transcription = await openai.createTranscription(
-      fs.createReadStream(audioFilePath),
-      "whisper-1"
-    );
-    fs.unlinkSync(audioFilePath); // Clean up
 
-    res.json({ text: transcription.data.text });
+    const transcription = await openai.audio.transcriptions.create({
+      file: fs.createReadStream(audioFilePath),
+      model: "gpt-4o-transcribe"
+    });
+
+    fs.unlinkSync(audioFilePath);
+
+    res.json({ text: transcription.text });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
 // CHAT ENDPOINT
-app.post('/chat', async (req, res) => {
+app.post("/chat", async (req, res) => {
   try {
     const { userText, conversationHistory } = req.body;
 
-    // Compose messages array with system prompt and conversation history
     const systemPrompt = `
 You are a friendly English tutor helping a student practice speaking English through natural conversation.
 
@@ -75,33 +79,31 @@ CONVERSATION RULES:
 - Do NOT write long paragraphs
 `;
 
-    // Prepare messages in OpenAI format
-    let messages = [
-      { role: "system", content: systemPrompt }
-    ];
-    if (conversationHistory && Array.isArray(conversationHistory)) {
-      conversationHistory.forEach(turn => {
+    let messages = [{ role: "system", content: systemPrompt }];
+
+    if (Array.isArray(conversationHistory)) {
+      conversationHistory.forEach((turn) => {
         messages.push({ role: "user", content: turn.user });
         messages.push({ role: "assistant", content: turn.ai });
       });
     }
+
     messages.push({ role: "user", content: userText });
 
-    const completion = await openai.createChatCompletion({
-      model: "gpt-4o",
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
       messages,
     });
 
-    const content = completion.data.choices[0].message.content;
+    const content = completion.choices[0].message.content;
 
-    // Parse the correction/reply from AI's content
     const correctedMatch = /Corrected:\s*([\s\S]*?)\s*Reply:/i.exec(content);
     const replyMatch = /Reply:\s*([\s\S]*)/i.exec(content);
 
     res.json({
       corrected: correctedMatch ? correctedMatch[1].trim() : "",
       reply: replyMatch ? replyMatch[1].trim() : "",
-      raw: content // For debugging
+      raw: content
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
