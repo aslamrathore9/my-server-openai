@@ -24,18 +24,18 @@ const openai = new OpenAI({
 });
 
 // TRANSCRIBE ENDPOINT
-app.post("/transcribe", upload.single("audio"), async (req, res) => {
+app.post('/transcribe', upload.single('audio'), async (req, res) => {
   try {
-    const audioFilePath = req.file.path;
+    const filePath = req.file.path;
+    const fileStream = fs.createReadStream(filePath);
 
-    const transcription = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(audioFilePath),
-      model: "gpt-4o-transcribe"
+    const openaiResponse = await openai.audio.transcriptions.create({
+      file: fileStream,
+      model: 'whisper-1',
     });
 
-    fs.unlinkSync(audioFilePath);
-
-    res.json({ text: transcription.text });
+    fs.unlinkSync(filePath);
+    res.json({ text: openaiResponse.text });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
