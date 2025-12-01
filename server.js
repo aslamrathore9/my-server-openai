@@ -26,16 +26,23 @@ const openai = new OpenAI({
 // TRANSCRIBE ENDPOINT
 app.post('/transcribe', upload.single('audio'), async (req, res) => {
   try {
-    const filePath = req.file.path;
-    const fileStream = fs.createReadStream(filePath);
+    // Ensure a .wav extension (critical for OpenAI/whisper on some platforms)
+	  console.log('File info:', req.file); // <---- ADD THIS LINE HERE
+    const oldPath = req.file.path;
+    const newPath = oldPath + '.wav';
+    fs.renameSync(oldPath, newPath);
 
+    const fileStream = fs.createReadStream(newPath);
+
+    // Call OpenAI Whisper
     const openaiResponse = await openai.audio.transcriptions.create({
       file: fileStream,
       model: 'whisper-1',
     });
 
-    fs.unlinkSync(filePath);
+    fs.unlinkSync(newPath);
     res.json({ text: openaiResponse.text });
+
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
