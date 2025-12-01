@@ -160,11 +160,34 @@ REMEMBER: Your response MUST start with "Corrected:" and include "Reply:" - this
 
     let messages = [{ role: "system", content: systemPrompt }];
 
-    if (Array.isArray(conversationHistory)) {
-      conversationHistory.forEach((turn) => {
-        messages.push({ role: "user", content: turn.user });
-        messages.push({ role: "assistant", content: turn.ai });
+    // OPTIMIZATION: Limit conversation history to reduce cost and improve performance
+    // Only keep the most recent conversation turns for context
+    // Configurable via environment variable (default: 5 turns - optimal for sentence corrections)
+    const MAX_HISTORY_TURNS = parseInt(process.env.MAX_CONVERSATION_HISTORY_TURNS || "5", 10);
+
+    if (Array.isArray(conversationHistory) && conversationHistory.length > 0) {
+      // Take only the last MAX_HISTORY_TURNS turns
+      const limitedHistory = conversationHistory.slice(-MAX_HISTORY_TURNS);
+
+      console.log(`Conversation history: ${conversationHistory.length} turns, using last ${limitedHistory.length} turns`);
+
+      limitedHistory.forEach((turn) => {
+        // Truncate very long messages to prevent excessive tokens
+        const MAX_MESSAGE_LENGTH = 500; // characters
+        const userMsg = turn.user && turn.user.length > MAX_MESSAGE_LENGTH
+          ? turn.user.substring(0, MAX_MESSAGE_LENGTH) + "..."
+          : turn.user;
+        const aiMsg = turn.ai && turn.ai.length > MAX_MESSAGE_LENGTH
+          ? turn.ai.substring(0, MAX_MESSAGE_LENGTH) + "..."
+          : turn.ai;
+
+        messages.push({ role: "user", content: userMsg });
+        messages.push({ role: "assistant", content: aiMsg });
       });
+
+      // Log token estimation (rough: ~4 characters per token)
+      const estimatedTokens = messages.reduce((sum, msg) => sum + (msg.content?.length || 0) / 4, 0);
+      console.log(`Estimated tokens: ~${Math.round(estimatedTokens)} (history: ${limitedHistory.length} turns)`);
     }
 
     messages.push({ role: "user", content: userText });
