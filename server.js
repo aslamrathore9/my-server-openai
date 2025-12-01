@@ -15,7 +15,7 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// File uploade
+// File upload
 const upload = multer({ dest: "uploads/" });
 
 // New OpenAI client
@@ -23,15 +23,62 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-// TRANSCRIBE ENDPOINT
+// TRANSCRIBE ENDPOINT with optimization and validation
 app.post('/transcribe', upload.single('audio'), async (req, res) => {
   console.log('File info:', req.file);
-  
+
   try {
-    // Ensure .wav extension (critical for OpenAI Whisper)
+    // Validation: Check if file exists
+    if (!req.file) {
+      return res.status(400).json({ error: "No audio file uploaded" });
+    }
+
+    // Validation: File size limit (5 MB max for fast uploads)
+    const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
+    if (req.file.size > MAX_FILE_SIZE) {
+      fs.unlinkSync(req.file.path); // Clean up
+      return res.status(400).json({
+        error: `File too large: ${(req.file.size / 1024 / 1024).toFixed(2)} MB. Maximum allowed: 5 MB. Please record shorter clips (max 30 seconds).`
+      });
+    }
+
+    // Validation: Minimum file size (prevent empty/corrupt files)
+    if (req.file.size < 1000) { // Less than 1 KB is suspicious
+      fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: "Audio file appears to be empty or corrupted" });
+    }
+
+    // Detect and handle file extension based on mimetype or original filename
+    let fileExtension = '.wav';
+    const originalName = req.file.originalname?.toLowerCase() || '';
+    const mimetype = req.file.mimetype?.toLowerCase() || '';
+
+    // Supported formats by OpenAI Whisper
+    if (originalName.includes('.ogg') || originalName.includes('.opus') || mimetype.includes('ogg') || mimetype.includes('opus')) {
+      fileExtension = '.ogg';
+    } else if (originalName.includes('.flac') || mimetype.includes('flac')) {
+      fileExtension = '.flac';
+    } else if (originalName.includes('.mp3') || mimetype.includes('mp3')) {
+      fileExtension = '.mp3';
+    } else if (originalName.includes('.m4a') || mimetype.includes('m4a')) {
+      fileExtension = '.m4a';
+    } else {
+      fileExtension = '.wav'; // Default to WAV
+    }
+
+    // Rename file with appropriate extension
     const oldPath = req.file.path;
-    const newPath = oldPath + '.wav';
+    const newPath = oldPath + fileExtension;
     fs.renameSync(oldPath, newPath);
+
+    // Estimate duration for logging (rough estimate: 16kHz mono 16-bit = 32KB per second)
+    const estimatedDuration = Math.round((req.file.size / 32000) * 100) / 100;
+    console.log(`Processing audio: ${(req.file.size / 1024).toFixed(2)} KB, estimated duration: ~${estimatedDuration}s`);
+
+    // Warning if estimated duration exceeds 30 seconds (but still process it)
+    if (estimatedDuration > 30) {
+      console.warn(`Warning: Audio clip is longer than recommended (${estimatedDuration}s). Consider limiting to 30 seconds for better performance.`);
+    }
 
     const fileStream = fs.createReadStream(newPath);
 
@@ -40,9 +87,16 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
       model: 'whisper-1',
     });
 
+    // Clean up temp file
     fs.unlinkSync(newPath);
+
     res.json({ text: openaiResponse.text });
   } catch (e) {
+    // Clean up file on error
+    if (req.file?.path && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+    console.error('Transcription error:', e);
     res.status(500).json({ error: e.message });
   }
 });
