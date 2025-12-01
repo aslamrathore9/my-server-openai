@@ -1,97 +1,113 @@
-import 'dotenv/config';
-import express from 'express';
-import fetch from 'node-fetch';
-import cors from 'cors';
-import fileUpload from 'express-fileupload';
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const multer = require('multer');
+const { Configuration, OpenAIApi } = require('openai');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
+const port = process.env.PORT || 3000;
+
+// Middleware
 app.use(cors());
 app.use(express.json());
-app.use(fileUpload());
 
-// 1️⃣ TRANSCRIBE AUDIO (speech → text)
-app.post("/transcribe", async (req, res) => {
+// For handling audio uploads
+const upload = multer({ dest: 'uploads/' });
+
+const openai = new OpenAIApi(new Configuration({
+  apiKey: process.env.OPENAI_API_KEY,
+}));
+
+// TRANSCRIBE ENDPOINT
+app.post('/transcribe', upload.single('audio'), async (req, res) => {
   try {
-    const audio = req.files?.audio;
-    if (!audio) return res.status(400).json({ error: "No audio file" });
+    const audioFilePath = req.file.path;
+    const transcription = await openai.createTranscription(
+      fs.createReadStream(audioFilePath),
+      "whisper-1"
+    );
+    fs.unlinkSync(audioFilePath); // Clean up
 
-    const formData = new FormData();
-    formData.append("file", audio.data, audio.name);
-    formData.append("model", "gpt-4o-mini-transcribe");  // best STT model
-
-    const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`
-      },
-      body: formData
-    });
-
-    const data = await response.json();
-    res.json({ text: data.text });
-
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.json({ text: transcription.data.text });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
-// 2️⃣ GPT-5-nano RESPONSE (text → reply)
-app.post("/ask", async (req, res) => {
+// CHAT ENDPOINT
+app.post('/chat', async (req, res) => {
   try {
-    const { prompt } = req.body;
+    const { userText, conversationHistory } = req.body;
 
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: "gpt-5-nano",     // your Android app uses this
-        messages: [
-          { role: "system", content: "You are an English speaking tutor. Keep replies short and interactive." },
-          { role: "user", content: prompt }
-        ]
-      })
+    // Compose messages array with system prompt and conversation history
+    const systemPrompt = `
+You are a friendly English tutor helping a student practice speaking English through natural conversation.
+
+YOUR PERSONALITY:
+- Be warm, encouraging, and supportive
+- Act like a friendly teacher who genuinely cares
+- Keep the conversation natural and flowing
+- Show enthusiasm about the student's progress
+
+MAIN TASKS:
+1. The user sends a sentence converted from voice using Whisper.
+2. First, correct the user's sentence so it becomes natural and proper English.
+3. Then generate a conversational reply that:
+   - Responds naturally to what they said
+   - Gently corrects mistakes (mention briefly if needed)
+   - Encourages them to continue
+   - Keeps the conversation going
+
+OUTPUT FORMAT (always follow this exactly):
+Corrected: <corrected sentence>
+Reply: <your conversational reply>
+
+CONVERSATION RULES:
+- Keep replies short and natural (1–2 sentences)
+- If the sentence is already correct, repeat it as-is in "Corrected:"
+- Be encouraging: "Great!", "Nice!", "Well done!"
+- Gently point out corrections: "That's close! The correct way is..."
+- Ask follow-up questions to keep conversation flowing
+- Maintain conversation context from previous turns
+- Do NOT explain corrections in detail
+- Do NOT write long paragraphs
+`;
+
+    // Prepare messages in OpenAI format
+    let messages = [
+      { role: "system", content: systemPrompt }
+    ];
+    if (conversationHistory && Array.isArray(conversationHistory)) {
+      conversationHistory.forEach(turn => {
+        messages.push({ role: "user", content: turn.user });
+        messages.push({ role: "assistant", content: turn.ai });
+      });
+    }
+    messages.push({ role: "user", content: userText });
+
+    const completion = await openai.createChatCompletion({
+      model: "gpt-4o",
+      messages,
     });
 
-    const data = await response.json();
+    const content = completion.data.choices[0].message.content;
+
+    // Parse the correction/reply from AI's content
+    const correctedMatch = /Corrected:\s*([\s\S]*?)\s*Reply:/i.exec(content);
+    const replyMatch = /Reply:\s*([\s\S]*)/i.exec(content);
 
     res.json({
-      reply: data.choices?.[0]?.message?.content ?? ""
+      corrected: correctedMatch ? correctedMatch[1].trim() : "",
+      reply: replyMatch ? replyMatch[1].trim() : "",
+      raw: content // For debugging
     });
-
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
-// 3️⃣ TTS (text → speech)
-app.post("/speak", async (req, res) => {
-  try {
-    const { text } = req.body;
-    if (!text) return res.status(400).json({ error: "No text provided" });
-
-    const response = await fetch("https://api.openai.com/v1/audio/speech", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini-tts",
-        input: text,
-        voice: "alloy"
-      })
-    });
-
-    const buf = Buffer.from(await response.arrayBuffer());
-    res.setHeader("Content-Type", "audio/mpeg");
-    res.send(buf);
-
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+app.listen(port, () => {
+  console.log(`Server live on port ${port}`);
 });
-
-app.listen(4000, () => console.log("Server running on port 4000"));
