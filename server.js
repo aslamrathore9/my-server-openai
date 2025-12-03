@@ -7,9 +7,15 @@ import multer from "multer";
 import fs from "fs";
 import path from "path";
 import OpenAI from "openai";
+import { RtcTokenBuilder, RtcRole } from "agora-access-token";
 
 const app = express();
 const port = process.env.PORT || 3000;
+
+// Agora configuration (optional - for token generation in production)
+// Get these from: https://console.agora.io/
+const AGORA_APP_ID = process.env.AGORA_APP_ID || "";
+const AGORA_APP_CERTIFICATE = process.env.AGORA_APP_CERTIFICATE || "";
 
 // Middleware
 app.use(cors());
@@ -215,7 +221,7 @@ REMEMBER: Your response MUST start with "Corrected:" and include "Reply:" - this
     } else {
       // Strategy 2: If format not found, try to extract from lines
       const lines = content.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-      
+
       for (let i = 0; i < lines.length; i++) {
         if (lines[i].toLowerCase().startsWith('corrected:')) {
           corrected = lines[i].substring(10).trim();
@@ -255,7 +261,68 @@ REMEMBER: Your response MUST start with "Corrected:" and include "Reply:" - this
   }
 });
 
+/**
+ * AGORA TOKEN GENERATION ENDPOINT (Optional - for production)
+ *
+ * This endpoint generates Agora RTC tokens for secure channel access.
+ * In production, use tokens instead of joining channels without authentication.
+ *
+ * GET /agora/token?channelName=<channel>&uid=<uid>
+ *
+ * Returns: { token: string, appId: string, channelName: string, uid: number }
+ */
+app.get('/agora/token', (req, res) => {
+  try {
+    const channelName = req.query.channelName || `channel-${Date.now()}`;
+    const uid = parseInt(req.query.uid) || 0;
+    const expirationTimeInSeconds = 3600; // Token valid for 1 hour
+
+    // If Agora credentials are not configured, return error
+    if (!AGORA_APP_ID || !AGORA_APP_CERTIFICATE) {
+      return res.status(500).json({
+        error: "Agora credentials not configured. Set AGORA_APP_ID and AGORA_APP_CERTIFICATE environment variables."
+      });
+    }
+
+    // Generate token
+    const currentTimestamp = Math.floor(Date.now() / 1000);
+    const privilegeExpiredTs = currentTimestamp + expirationTimeInSeconds;
+
+    const token = RtcTokenBuilder.buildTokenWithUid(
+      AGORA_APP_ID,
+      AGORA_APP_CERTIFICATE,
+      channelName,
+      uid,
+      RtcRole.PUBLISHER, // Role: PUBLISHER can publish and subscribe
+      privilegeExpiredTs
+    );
+
+    res.json({
+      token: token,
+      appId: AGORA_APP_ID,
+      channelName: channelName,
+      uid: uid,
+      expirationTime: privilegeExpiredTs
+    });
+  } catch (e) {
+    console.error('Agora token generation error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * Health check endpoint
+ */
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    agoraConfigured: !!(AGORA_APP_ID && AGORA_APP_CERTIFICATE)
+  });
+});
+
 app.listen(port, () => {
   console.log(`Server live on port ${port}`);
+  console.log(`Agora configured: ${!!(AGORA_APP_ID && AGORA_APP_CERTIFICATE)}`);
 });
 
