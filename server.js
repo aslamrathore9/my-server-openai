@@ -105,22 +105,21 @@ app.post('/tts', async (req, res) => {
       return res.status(400).json({ error: "Text input is required" });
     }
 
-    // Call OpenAI TTS API
-    const mp3 = await openai.audio.speech.create({
+    // Call OpenAI TTS API with streaming
+    const response = await openai.audio.speech.create({
       model: model,
       voice: voice,
       input: input,
+      response_format: 'mp3',
     });
 
-    // Convert response to buffer
-    const buffer = Buffer.from(await mp3.arrayBuffer());
-
-    // Set headers for audio response
+    // Set headers for partial content / streaming
     res.setHeader('Content-Type', 'audio/mpeg');
-    res.setHeader('Content-Length', buffer.length);
 
-    // Send audio data
-    res.send(buffer);
+    // Pipe the stream directly to the response
+    // For Node-compatible formatting from OpenAI V4 SDK:
+    const stream = response.body;
+    stream.pipe(res);
   } catch (e) {
     console.error('TTS error:', e);
     res.status(500).json({ error: e.message });
