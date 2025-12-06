@@ -13,10 +13,10 @@ const { RtcTokenBuilder, RtcRole } = pkg;
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Agora configuration (optional - for token generation in production)
+// Agora configuration
 // Get these from: https://console.agora.io/
-const AGORA_APP_ID = process.env.AGORA_APP_ID || "";
-const AGORA_APP_CERTIFICATE = process.env.AGORA_APP_CERTIFICATE || "";
+const AGORA_APP_ID = process.env.AGORA_APP_ID || "744d03da04924c529c29920155b46765"; // Using the ID found in previous docs
+const AGORA_APP_CERTIFICATE = process.env.AGORA_APP_CERTIFICATE || "dummy_cert"; // Needs real cert for production
 
 // Middleware
 app.use(cors());
