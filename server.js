@@ -250,6 +250,153 @@ REMEMBER: Your response MUST start with "Corrected:" and include "Reply:" - this
   }
 });
 
+// SMART STREAMING ENDPOINT for low latency (<4s)
+// 1. Streams text from GPT-4
+// 2. Detects 'Reply:'
+// 3. Sentences are sent to TTS immediately
+// 4. Audio is streamed back to client
+app.post('/chat-audio-stream', async (req, res) => {
+  try {
+    const { userText, conversationHistory } = req.body;
+    console.log(`Smart Stream Request: "${userText}"`);
+
+    // Prepare messages
+    const systemPrompt = `You are a friendly English tutor.
+CRITICAL: You MUST ALWAYS respond in this EXACT format:
+Corrected: [corrected sentence]
+Reply: [short conversational reply]
+Rules:
+1. Start with "Corrected:"
+2. Follow with "Reply:"
+3. Keep replies short (1-2 sentences)`;
+
+    let messages = [{ role: "system", content: systemPrompt }];
+
+    // History handling (same as before)
+    const MAX_HISTORY_TURNS = 5;
+    if (Array.isArray(conversationHistory) && conversationHistory.length > 0) {
+      const limited = conversationHistory.slice(-MAX_HISTORY_TURNS);
+      limited.forEach(t => {
+        messages.push({ role: "user", content: t.user });
+        messages.push({ role: "assistant", content: t.ai });
+      });
+    }
+    messages.push({ role: "user", content: userText });
+
+    // Header for streaming audio
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Transfer-Encoding', 'chunked');
+
+    // State machine for parsing
+    let buffer = "";
+    let isReply = false;
+    let sentenceBuffer = "";
+    let correctedSentence = ""; // We might want to send this back in a header or separate event, but for now we focus on audio.
+    // Actually, client needs the text too.
+    // PROBLEM: We are streaming AUDIO data. We can't easily mix JSON text data in the same stream without a custom protocol.
+    // COMPROMISE: We will log the text on server, and maybe send it as a custom HTTP header at the end?
+    // No, HTTP headers must be sent first.
+    // SOLUTION for now: We only stream audio. The client will just play audio.
+    // The "transcript" update on UI will be delayed or we can use a separate call?
+    // OR: We can use Multipart response? Too complex for Android client.
+    // SIMPLEST: This endpoint returns AUDIO. The client updates UI with "Listening..." -> "Playing...".
+    // We lose the text display update for "Corrected" text immediately, but we gain speed.
+    // We can send the "Corrected" and "Reply" text in a HEADER if it's short enough?
+    // Yes, we can set headers before the first audio chunk if we buffer just enough to find the "Corrected" part.
+    // GPT-4 generates "Corrected:" FIRST. So we can grab that, set header, then stream audio.
+
+    const stream = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages,
+      stream: true,
+      max_tokens: 200,
+    });
+
+    for await (const chunk of stream) {
+      const token = chunk.choices[0]?.delta?.content || "";
+      buffer += token;
+
+      // 1. Detect "Corrected:" part
+      if (!isReply && buffer.includes("Reply:")) {
+        const parts = buffer.split("Reply:");
+        const correctedPart = parts[0];
+        // Clean up corrected text
+        correctedSentence = correctedPart.replace("Corrected:", "").trim();
+
+        // Send corrected text as header (if possible - might happen after we started sending? No, we haven't sent anything yet!)
+        // Note: Headers must be set before first write.
+        // If we haven't written to res yet, we are good.
+        // Sanitize header to avoid errors
+        const safeHeader = Buffer.from(correctedSentence).toString('base64');
+        res.setHeader('X-Corrected-Text-B64', safeHeader);
+
+        isReply = true;
+        buffer = parts[1] || ""; // Start buffering reply
+        sentenceBuffer = buffer;
+        continue;
+      }
+
+      if (isReply) {
+        sentenceBuffer += token;
+        // 2. Detect sentence end (. ? !)
+        // We use a regex to look for sentence terminators followed by space or end
+        if (/[.?!]\s/.test(sentenceBuffer) || (sentenceBuffer.length > 50 && /[.?!]$/.test(sentenceBuffer))) {
+          const sentence = sentenceBuffer.trim();
+          if (sentence.length > 0) {
+            console.log(`TTS Processing: "${sentence}"`);
+            await streamTtsToResponse(sentence, res);
+            sentenceBuffer = "";
+          }
+        }
+      }
+    }
+
+    // Process remaining buffer
+    if (isReply && sentenceBuffer.trim().length > 0) {
+      console.log(`TTS Processing (Final): "${sentenceBuffer}"`);
+      await streamTtsToResponse(sentenceBuffer, res);
+    } else if (!isReply && buffer.length > 0) {
+      // Fallback: entire response was not formatted correctly, just say it
+      console.log(`Fallback TTS: "${buffer}"`);
+      await streamTtsToResponse(buffer, res);
+    }
+
+    // Add valid JSON object at the end? No, MP3 stream.
+    res.end();
+
+  } catch (e) {
+    console.error('Smart Stream Error:', e);
+    // If headers sent, we can't send JSON error.
+    if (!res.headersSent) {
+      res.status(500).json({ error: e.message });
+    } else {
+      res.end();
+    }
+  }
+});
+
+// Helper to send TTS audio to response stream
+async function streamTtsToResponse(text, res) {
+  try {
+    const mp3Response = await openai.audio.speech.create({
+      model: "tts-1",
+      voice: "alloy",
+      input: text,
+      response_format: "mp3"
+    });
+
+    // We get a ReadableStream (web standard) or buffer.
+    // V4 SDK returns a Response-like object.
+    // We can get buffer() or body (stream).
+    const buffer = Buffer.from(await mp3Response.arrayBuffer());
+    res.write(buffer);
+    // Note: We are writing MP3 frames back-to-back.
+    // Most players (ExoPlayer, VLC) handle concatenated MP3s fine!
+  } catch (e) {
+    console.error("TTS Segment Error:", e);
+  }
+}
+
 /**
  * AGORA TOKEN GENERATION ENDPOINT (Optional - for production)
  *
