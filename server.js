@@ -7,16 +7,22 @@ import multer from "multer";
 import fs from "fs";
 import path from "path";
 import OpenAI from "openai";
+import { RtcTokenBuilder, RtcRole } from "agora-access-token";
 
 const app = express();
 const port = process.env.PORT || 3000;
+
+// Agora configuration (optional - for token generation in production)
+// Get these from: https://console.agora.io/
+const AGORA_APP_ID = process.env.AGORA_APP_ID || "";
+const AGORA_APP_CERTIFICATE = process.env.AGORA_APP_CERTIFICATE || "";
 
 // Middleware
 app.use(cors());
 app.use(express.json());
 
 // File upload
-const upload = multer({ dest: "uploads/" });
+const upload = multer({ storage: multer.memoryStorage() });
 
 // New OpenAI client
 const openai = new OpenAI({
@@ -49,53 +55,42 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
     }
 
     // Detect and handle file extension based on mimetype or original filename
-    let fileExtension = '.wav';
+    let fileExtension = 'wav';
     const originalName = req.file.originalname?.toLowerCase() || '';
     const mimetype = req.file.mimetype?.toLowerCase() || '';
 
     // Supported formats by OpenAI Whisper
     if (originalName.includes('.ogg') || originalName.includes('.opus') || mimetype.includes('ogg') || mimetype.includes('opus')) {
-      fileExtension = '.ogg';
+      fileExtension = 'ogg';
     } else if (originalName.includes('.flac') || mimetype.includes('flac')) {
-      fileExtension = '.flac';
+      fileExtension = 'flac';
     } else if (originalName.includes('.mp3') || mimetype.includes('mp3')) {
-      fileExtension = '.mp3';
+      fileExtension = 'mp3';
     } else if (originalName.includes('.m4a') || mimetype.includes('m4a')) {
-      fileExtension = '.m4a';
+      fileExtension = 'm4a';
     } else {
-      fileExtension = '.wav'; // Default to WAV
+      fileExtension = 'wav'; // Default to WAV
     }
-
-    // Rename file with appropriate extension
-    const oldPath = req.file.path;
-    const newPath = oldPath + fileExtension;
-    fs.renameSync(oldPath, newPath);
 
     // Estimate duration for logging (rough estimate: 16kHz mono 16-bit = 32KB per second)
     const estimatedDuration = Math.round((req.file.size / 32000) * 100) / 100;
-    console.log(`Processing audio: ${(req.file.size / 1024).toFixed(2)} KB, estimated duration: ~${estimatedDuration}s`);
+    console.log(`Processing audio (RAM): ${(req.file.size / 1024).toFixed(2)} KB, estimated duration: ~${estimatedDuration}s`);
 
-    // Warning if estimated duration exceeds 30 seconds (but still process it)
-    if (estimatedDuration > 30) {
-      console.warn(`Warning: Audio clip is longer than recommended (${estimatedDuration}s). Consider limiting to 30 seconds for better performance.`);
-    }
+    // Create a File object-like structure that OpenAI accepts
+    // We can use the 'toFile' helper from OpenAI if available, or just construct a Blob/File if Node environment supports it.
+    // However, the simplest way compatible with the v4 SDK that expects a 'file' argument is to pass a ReadStream if using 'fs',
+    // OR use the 'toFile' helper from openai/uploads.
 
-    const fileStream = fs.createReadStream(newPath);
+    // Since we are in Node and want to avoid disk I/O, we can convert the buffer to a helper file object.
+    const file = await OpenAI.toFile(req.file.buffer, `audio.${fileExtension}`, { type: mimetype || 'audio/wav' });
 
     const openaiResponse = await openai.audio.transcriptions.create({
-      file: fileStream,
+      file: file,
       model: 'whisper-1',
     });
 
-    // Clean up temp file
-    fs.unlinkSync(newPath);
-
     res.json({ text: openaiResponse.text });
   } catch (e) {
-    // Clean up file on error
-    if (req.file?.path && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
     console.error('Transcription error:', e);
     res.status(500).json({ error: e.message });
   }
@@ -215,7 +210,7 @@ REMEMBER: Your response MUST start with "Corrected:" and include "Reply:" - this
     } else {
       // Strategy 2: If format not found, try to extract from lines
       const lines = content.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-      
+
       for (let i = 0; i < lines.length; i++) {
         if (lines[i].toLowerCase().startsWith('corrected:')) {
           corrected = lines[i].substring(10).trim();
@@ -255,7 +250,68 @@ REMEMBER: Your response MUST start with "Corrected:" and include "Reply:" - this
   }
 });
 
+/**
+ * AGORA TOKEN GENERATION ENDPOINT (Optional - for production)
+ *
+ * This endpoint generates Agora RTC tokens for secure channel access.
+ * In production, use tokens instead of joining channels without authentication.
+ *
+ * GET /agora/token?channelName=<channel>&uid=<uid>
+ *
+ * Returns: { token: string, appId: string, channelName: string, uid: number }
+ */
+app.get('/agora/token', (req, res) => {
+  try {
+    const channelName = req.query.channelName || `channel-${Date.now()}`;
+    const uid = parseInt(req.query.uid) || 0;
+    const expirationTimeInSeconds = 3600; // Token valid for 1 hour
+
+    // If Agora credentials are not configured, return error
+    if (!AGORA_APP_ID || !AGORA_APP_CERTIFICATE) {
+      return res.status(500).json({
+        error: "Agora credentials not configured. Set AGORA_APP_ID and AGORA_APP_CERTIFICATE environment variables."
+      });
+    }
+
+    // Generate token
+    const currentTimestamp = Math.floor(Date.now() / 1000);
+    const privilegeExpiredTs = currentTimestamp + expirationTimeInSeconds;
+
+    const token = RtcTokenBuilder.buildTokenWithUid(
+      AGORA_APP_ID,
+      AGORA_APP_CERTIFICATE,
+      channelName,
+      uid,
+      RtcRole.PUBLISHER, // Role: PUBLISHER can publish and subscribe
+      privilegeExpiredTs
+    );
+
+    res.json({
+      token: token,
+      appId: AGORA_APP_ID,
+      channelName: channelName,
+      uid: uid,
+      expirationTime: privilegeExpiredTs
+    });
+  } catch (e) {
+    console.error('Agora token generation error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * Health check endpoint
+ */
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    agoraConfigured: !!(AGORA_APP_ID && AGORA_APP_CERTIFICATE)
+  });
+});
+
 app.listen(port, () => {
   console.log(`Server live on port ${port}`);
+  console.log(`Agora configured: ${!!(AGORA_APP_ID && AGORA_APP_CERTIFICATE)}`);
 });
 
