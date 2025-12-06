@@ -7,7 +7,8 @@ import multer from "multer";
 import fs from "fs";
 import path from "path";
 import OpenAI from "openai";
-import { RtcTokenBuilder, RtcRole } from "agora-access-token";
+import pkg from "agora-access-token";
+const { RtcTokenBuilder, RtcRole } = pkg;
 
 const app = express();
 const port = process.env.PORT || 3000;
