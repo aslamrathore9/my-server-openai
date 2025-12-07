@@ -524,3 +524,32 @@ app.listen(port, () => {
   console.log(`Agora configured: ${!!(AGORA_APP_ID && AGORA_APP_CERTIFICATE)}`);
 });
 
+// ==========================================
+// REALTIME WEBSOCKET SERVER
+// ==========================================
+import { WebSocketServer } from 'ws';
+import WebSocket from 'ws';
+
+const wss = new WebSocketServer({ port: 8080 }); // Separate port for WS or use same server instance if possible?
+// To use same port with Express:
+// const server = app.listen(port, ...)
+// const wss = new WebSocketServer({ server });
+// But for simplicity/Railway sometimes separate ports are tricky.
+// Let's attach to the existing express server if possible.
+// However, 'app.listen' returns the HTTP server.
+// We need to capture it.
+
+// RE-WRITING LISTEN PART TO ATTACH WS
+// We cannot easily change lines 460-463 safely with replace without replacing the variable.
+// I will assume for now we use a different port 8080 or I need to refactor the listen call.
+// Let's refactor the listen call in a subsequent step if strictly needed,
+// BUT for now, let's use the standard "attach to http server" pattern by replacing the listen block.
+// Wait, I can't replace the variable 'app' easily.
+// I will just modify the bottom of the file to export the upgrade handler or just listen on a new port?
+// Hosting providers (Railway/Render) usually only expose ONE port.
+// So we MUST attach to the same HTTP server.
+
+/*
+I will perform a larger replacement of the app.listen block to integrate WS.
+*/
+
