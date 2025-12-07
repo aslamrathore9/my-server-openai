@@ -262,13 +262,11 @@ app.post('/chat-audio-stream', async (req, res) => {
 
     // Prepare messages
     const systemPrompt = `You are a friendly English tutor.
-CRITICAL: You MUST ALWAYS respond in this EXACT format:
-Corrected: [corrected sentence]
-Reply: [short conversational reply]
+CRITICAL: You MUST ALWAYS respond with a short conversational reply only.
 Rules:
-1. Start with "Corrected:"
-2. Follow with "Reply:"
-3. Keep replies short (1-2 sentences)`;
+1. Do NOT provide corrections.
+2. Keep replies short (1-2 sentences).
+3. Be natural and encouraging.`;
 
     let messages = [{ role: "system", content: systemPrompt }];
 
@@ -315,50 +313,24 @@ Rules:
     for await (const chunk of stream) {
       const token = chunk.choices[0]?.delta?.content || "";
       buffer += token;
+      sentenceBuffer += token;
 
-      // 1. Detect "Corrected:" part
-      if (!isReply && buffer.includes("Reply:")) {
-        const parts = buffer.split("Reply:");
-        const correctedPart = parts[0];
-        // Clean up corrected text
-        correctedSentence = correctedPart.replace("Corrected:", "").trim();
-
-        // Send corrected text as header (if possible - might happen after we started sending? No, we haven't sent anything yet!)
-        // Note: Headers must be set before first write.
-        // If we haven't written to res yet, we are good.
-        // Sanitize header to avoid errors
-        const safeHeader = Buffer.from(correctedSentence).toString('base64');
-        res.setHeader('X-Corrected-Text-B64', safeHeader);
-
-        isReply = true;
-        buffer = parts[1] || ""; // Start buffering reply
-        sentenceBuffer = buffer;
-        continue;
-      }
-
-      if (isReply) {
-        sentenceBuffer += token;
-        // 2. Detect sentence end (. ? !)
-        // We use a regex to look for sentence terminators followed by space or end
-        if (/[.?!]\s/.test(sentenceBuffer) || (sentenceBuffer.length > 50 && /[.?!]$/.test(sentenceBuffer))) {
-          const sentence = sentenceBuffer.trim();
-          if (sentence.length > 0) {
-            console.log(`TTS Processing: "${sentence}"`);
-            await streamTtsToResponse(sentence, res);
-            sentenceBuffer = "";
-          }
+      // Detect sentence end (. ? !)
+      if (/[.?!]\s/.test(sentenceBuffer) || (sentenceBuffer.length > 50 && /[.?!]$/.test(sentenceBuffer))) {
+        const sentence = sentenceBuffer.trim();
+        if (sentence.length > 0) {
+          console.log(`TTS Processing: "${sentence}"`);
+          await streamTtsToResponse(sentence, res);
+          sentenceBuffer = "";
         }
       }
     }
 
     // Process remaining buffer
-    if (isReply && sentenceBuffer.trim().length > 0) {
+    // Process remaining buffer
+    if (sentenceBuffer.trim().length > 0) {
       console.log(`TTS Processing (Final): "${sentenceBuffer}"`);
       await streamTtsToResponse(sentenceBuffer, res);
-    } else if (!isReply && buffer.length > 0) {
-      // Fallback: entire response was not formatted correctly, just say it
-      console.log(`Fallback TTS: "${buffer}"`);
-      await streamTtsToResponse(buffer, res);
     }
 
     // Add valid JSON object at the end? No, MP3 stream.
