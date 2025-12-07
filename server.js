@@ -5,7 +5,7 @@ import express from "express";
 import cors from "cors";
 import multer from "multer";
 import fs from "fs";
-import path from "path";
+
 import OpenAI from "openai";
 import pkg from "agora-access-token";
 const { RtcTokenBuilder, RtcRole } = pkg;
@@ -538,7 +538,8 @@ wss.on('connection', (ws) => {
   let isOpenAIConnected = false;
 
   // Connect to OpenAI Realtime API
-  const url = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01";
+  // Updated to latest model version (as of December 2024)
+  const url = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17";
   const openaiWs = new WebSocket(url, {
     headers: {
       "Authorization": "Bearer " + process.env.OPENAI_API_KEY,
