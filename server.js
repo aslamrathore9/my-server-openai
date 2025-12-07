@@ -519,37 +519,124 @@ app.get('/health', (req, res) => {
   });
 });
 
-app.listen(port, () => {
-  console.log(`Server live on port ${port}`);
-  console.log(`Agora configured: ${!!(AGORA_APP_ID && AGORA_APP_CERTIFICATE)}`);
-});
-
 // ==========================================
-// REALTIME WEBSOCKET SERVER
+// REALTIME WEBSOCKET SETUP
 // ==========================================
+import http from 'http';
 import { WebSocketServer } from 'ws';
 import WebSocket from 'ws';
 
-const wss = new WebSocketServer({ port: 8080 }); // Separate port for WS or use same server instance if possible?
-// To use same port with Express:
-// const server = app.listen(port, ...)
-// const wss = new WebSocketServer({ server });
-// But for simplicity/Railway sometimes separate ports are tricky.
-// Let's attach to the existing express server if possible.
-// However, 'app.listen' returns the HTTP server.
-// We need to capture it.
+// Create HTTP server from Express app
+const server = http.createServer(app);
 
-// RE-WRITING LISTEN PART TO ATTACH WS
-// We cannot easily change lines 460-463 safely with replace without replacing the variable.
-// I will assume for now we use a different port 8080 or I need to refactor the listen call.
-// Let's refactor the listen call in a subsequent step if strictly needed,
-// BUT for now, let's use the standard "attach to http server" pattern by replacing the listen block.
-// Wait, I can't replace the variable 'app' easily.
-// I will just modify the bottom of the file to export the upgrade handler or just listen on a new port?
-// Hosting providers (Railway/Render) usually only expose ONE port.
-// So we MUST attach to the same HTTP server.
+// Attach WebSocket Server to the same HTTP server
+const wss = new WebSocketServer({ server });
 
-/*
-I will perform a larger replacement of the app.listen block to integrate WS.
-*/
+wss.on('connection', (ws) => {
+  console.log("Client connected to WebSocket");
+
+  let isOpenAIConnected = false;
+
+  // Connect to OpenAI Realtime API
+  const url = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01";
+  const openaiWs = new WebSocket(url, {
+    headers: {
+      "Authorization": "Bearer " + process.env.OPENAI_API_KEY,
+      "OpenAI-Beta": "realtime=v1",
+    },
+  });
+
+  // Relay: Client -> OpenAI
+  ws.on('message', (message) => {
+    try {
+      if (!isOpenAIConnected) {
+        console.log("Buffering message until OpenAI connects...");
+        return; // Or buffer? For simplicity, we drop or client should wait.
+      }
+
+      const msgStr = message.toString();
+      // Check if it's raw binary data?
+      // Our client sends raw bytes.
+      // BUT the WS lib usually gives us a Buffer.
+      // If it's a Buffer, we assume it's audio.
+
+      // However, we need to wrap it in the JSON event for OpenAI: 'input_audio_buffer.append'
+      // If the client implemented `sendRealtimeAudio` sending raw bytes:
+      if (Buffer.isBuffer(message) || (typeof message !== 'string' && !msgStr.trim().startsWith('{'))) {
+        // It's likely audio bytes
+        const audioBase64 = message.toString('base64');
+        const audioEvent = {
+          type: 'input_audio_buffer.append',
+          audio: audioBase64
+        };
+        openaiWs.send(JSON.stringify(audioEvent));
+      } else {
+        // It's likely a JSON control message (if we implement those later)
+        // Check if it's valid JSON
+        if (msgStr.trim().startsWith('{')) {
+          openaiWs.send(msgStr);
+        }
+      }
+    } catch (e) {
+      console.error("Relay error client->openai", e);
+    }
+  });
+
+  // Relay: OpenAI -> Client
+  openaiWs.on('open', () => {
+    console.log("Connected to OpenAI Realtime");
+    isOpenAIConnected = true;
+
+    // Initialize Session
+    const sessionConfig = {
+      type: 'session.update',
+      session: {
+        modalities: ['text', 'audio'],
+        input_audio_transcription: {
+          model: 'whisper-1'
+        },
+        voice: 'alloy',
+        instructions: 'You are a friendly English tutor. Keep replies short, natural, and encouraging. Fast conversation.',
+        turn_detection: {
+          type: 'server_vad',
+          threshold: 0.5,
+          prefix_padding_ms: 300,
+          silence_duration_ms: 500
+        }
+      }
+    };
+    openaiWs.send(JSON.stringify(sessionConfig));
+  });
+
+  openaiWs.on('message', (data) => {
+    try {
+      const eventStr = data.toString();
+      // Forward everything to client
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(eventStr);
+      }
+    } catch (e) {
+      console.error("Relay error openai->client", e);
+    }
+  });
+
+  openaiWs.on('error', (e) => console.error("OpenAI WS Error", e));
+
+  openaiWs.on('close', () => {
+    console.log("OpenAI WS Closed");
+    // Close client too?
+    if (ws.readyState === WebSocket.OPEN) ws.close();
+  });
+
+  ws.on('close', () => {
+    console.log("Client disconnected");
+    if (openaiWs.readyState === WebSocket.OPEN) openaiWs.close();
+  });
+});
+
+// Start the HTTP+WS server
+server.listen(port, () => {
+  console.log(`Server (HTTP+WS) live on port ${port}`);
+  console.log(`Agora configured: ${!!(AGORA_APP_ID && AGORA_APP_CERTIFICATE)}`);
+});
 
