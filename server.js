@@ -250,6 +250,96 @@ REMEMBER: Your response MUST start with "Corrected:" and include "Reply:" - this
   }
 });
 
+// CONVERSE ENDPOINT (One-Shot: Audio -> Audio)
+// Combines Transcribe + Chat + TTS for lowest latency
+app.post('/converse', upload.single('audio'), async (req, res) => {
+  try {
+    console.log(`Converse Request received`);
+
+    // 1. Transcribe
+    if (!req.file) return res.status(400).json({ error: "No audio file" });
+
+    // Quick validation
+    if (req.file.size > 5 * 1024 * 1024) return res.status(400).json({ error: "File too large" });
+
+    const file = await OpenAI.toFile(req.file.buffer, "audio.wav");
+
+    // Start Transcription
+    const transcriptResponse = await openai.audio.transcriptions.create({
+      file: file,
+      model: 'whisper-1',
+    });
+
+    const userText = transcriptResponse.text;
+    console.log(`Transcribed: "${userText}"`);
+
+    // 2. Set Header for Client UI (Instant "You said")
+    // Use Base64 to avoid encoding issues with special chars
+    res.setHeader('X-Transcript-B64', Buffer.from(userText).toString('base64'));
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Transfer-Encoding', 'chunked');
+
+    // 3. Chat & Stream
+    // Parse history from body text field (Multer puts text fields in req.body)
+    let conversationHistory = [];
+    try {
+      if (req.body.conversationHistory) {
+        conversationHistory = JSON.parse(req.body.conversationHistory);
+      }
+    } catch (e) { console.warn("History parse error", e); }
+
+    const messages = [{
+      role: "system",
+      content: `You are a friendly English tutor. Respond with a short conversational reply only. No corrections. Keep it natural and under 2 sentences.`
+    }];
+
+    // Add history
+    const MAX_HISTORY_TURNS = 5;
+    if (Array.isArray(conversationHistory) && conversationHistory.length > 0) {
+      conversationHistory.slice(-MAX_HISTORY_TURNS).forEach(t => {
+        messages.push({ role: "user", content: t.user });
+        messages.push({ role: "assistant", content: t.ai });
+      });
+    }
+    messages.push({ role: "user", content: userText });
+
+    const stream = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages,
+      stream: true,
+      max_tokens: 200,
+    });
+
+    let sentenceBuffer = "";
+
+    for await (const chunk of stream) {
+      const token = chunk.choices[0]?.delta?.content || "";
+      sentenceBuffer += token;
+
+      if (/[.?!]\s/.test(sentenceBuffer) || (sentenceBuffer.length > 50 && /[.?!]$/.test(sentenceBuffer))) {
+        const sentence = sentenceBuffer.trim();
+        if (sentence.length > 0) {
+          console.log(`Converse TTS: "${sentence}"`);
+          await streamTtsToResponse(sentence, res);
+          sentenceBuffer = "";
+        }
+      }
+    }
+
+    if (sentenceBuffer.trim().length > 0) {
+      console.log(`Converse TTS (Final): "${sentenceBuffer}"`);
+      await streamTtsToResponse(sentenceBuffer, res);
+    }
+
+    res.end();
+
+  } catch (e) {
+    console.error('Converse Error:', e);
+    if (!res.headersSent) res.status(500).json({ error: e.message });
+    else res.end();
+  }
+});
+
 // SMART STREAMING ENDPOINT for low latency (<4s)
 // 1. Streams text from GPT-4
 // 2. Detects 'Reply:'
