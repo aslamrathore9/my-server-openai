@@ -7,16 +7,12 @@ import multer from "multer";
 import fs from "fs";
 
 import OpenAI from "openai";
-import pkg from "agora-access-token";
-const { RtcTokenBuilder, RtcRole } = pkg;
+
 
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Agora configuration
-// Get these from: https://console.agora.io/
-const AGORA_APP_ID = process.env.AGORA_APP_ID || "744d03da04924c529c29920155b46765"; // Using the ID found in previous docs
-const AGORA_APP_CERTIFICATE = process.env.AGORA_APP_CERTIFICATE || "dummy_cert"; // Needs real cert for production
+
 
 // Middleware
 app.use(cors());
@@ -459,54 +455,7 @@ async function streamTtsToResponse(text, res) {
   }
 }
 
-/**
- * AGORA TOKEN GENERATION ENDPOINT (Optional - for production)
- *
- * This endpoint generates Agora RTC tokens for secure channel access.
- * In production, use tokens instead of joining channels without authentication.
- *
- * GET /agora/token?channelName=<channel>&uid=<uid>
- *
- * Returns: { token: string, appId: string, channelName: string, uid: number }
- */
-app.get('/agora/token', (req, res) => {
-  try {
-    const channelName = req.query.channelName || `channel-${Date.now()}`;
-    const uid = parseInt(req.query.uid) || 0;
-    const expirationTimeInSeconds = 3600; // Token valid for 1 hour
 
-    // If Agora credentials are not configured, return error
-    if (!AGORA_APP_ID || !AGORA_APP_CERTIFICATE) {
-      return res.status(500).json({
-        error: "Agora credentials not configured. Set AGORA_APP_ID and AGORA_APP_CERTIFICATE environment variables."
-      });
-    }
-
-    // Generate token
-    const currentTimestamp = Math.floor(Date.now() / 1000);
-    const privilegeExpiredTs = currentTimestamp + expirationTimeInSeconds;
-
-    const token = RtcTokenBuilder.buildTokenWithUid(
-      AGORA_APP_ID,
-      AGORA_APP_CERTIFICATE,
-      channelName,
-      uid,
-      RtcRole.PUBLISHER, // Role: PUBLISHER can publish and subscribe
-      privilegeExpiredTs
-    );
-
-    res.json({
-      token: token,
-      appId: AGORA_APP_ID,
-      channelName: channelName,
-      uid: uid,
-      expirationTime: privilegeExpiredTs
-    });
-  } catch (e) {
-    console.error('Agora token generation error:', e);
-    res.status(500).json({ error: e.message });
-  }
-});
 
 /**
  * Health check endpoint
@@ -514,8 +463,7 @@ app.get('/agora/token', (req, res) => {
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
-    timestamp: new Date().toISOString(),
-    agoraConfigured: !!(AGORA_APP_ID && AGORA_APP_CERTIFICATE)
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -599,27 +547,23 @@ wss.on('connection', (ws) => {
         voice: 'alloy',
         // Configure audio output format for better quality
         output_audio_format: 'pcm16',
-        instructions: `You are a voice assistant that communicates with the user through speech.
+        instructions: `
+        You are a friendly English tutor helping the user improve spoken English.
 
-RULES:
-1. Never treat your own generated audio as user input.
-2. Only respond to real human speech detected from the microphone.
-3. If your previous output or synthesized speech is detected in the input, ignore it completely.
-4. While you are speaking, pause listening to prevent self-loop.
-5. If the human interrupts while you are speaking, stop immediately and listen to the user's voice.
-6. Always wait for real human input before generating a new response.
-7. If no human input is detected, remain silent.
-8. Only start speaking again after user input is received.
-9. If input resembles your previous response with high similarity (>70%), ignore it.
-10. Treat all microphone signals as human unless they match your own recent output.
+        CRITICAL FORMAT RULES (must ALWAYS follow):
+        1. ALWAYS respond in exactly this format:
 
-GOAL: Provide responsive, human-interruptible conversation without self-echo loops.
+        Corrected: <corrected English sentence>
+        Reply: <short friendly response>
 
-CONVERSATION STYLE:
-- You are a friendly English tutor
-- Keep replies short and natural (1-2 sentences max)
-- Be encouraging and supportive
-- Help with English practice in a conversational way`,
+        2. If the user's sentence is already correct, repeat it in the Corrected part.
+        3. Replies must be natural, friendly, and short (1–2 sentences).
+        4. No restrictions — you can talk about any topic the user brings.
+        5. ALWAYS ALWAYS start with "Corrected:" then "Reply:" exactly.
+
+        EXAMPLE:
+        Corrected: I want to improve my English speaking.
+        Reply: That’s great! I can help you with that anytime`,
         turn_detection: {
           type: 'server_vad',
           threshold: 0.5,
@@ -660,6 +604,6 @@ CONVERSATION STYLE:
 // Start the HTTP+WS server
 server.listen(port, () => {
   console.log(`Server (HTTP+WS) live on port ${port}`);
-  console.log(`Agora configured: ${!!(AGORA_APP_ID && AGORA_APP_CERTIFICATE)}`);
+  console.log(`Server (HTTP+WS) live on port ${port}`);
 });
 
