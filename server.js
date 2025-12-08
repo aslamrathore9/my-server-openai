@@ -529,7 +529,7 @@ import WebSocket from 'ws';
 // Create HTTP server from Express app
 const server = http.createServer(app);
 
-// Attach WebSocket Server to the same HTTP server f
+// Attach WebSocket Server to the same HTTP server
 const wss = new WebSocketServer({ server });
 
 wss.on('connection', (ws) => {
@@ -539,7 +539,7 @@ wss.on('connection', (ws) => {
 
   // Connect to OpenAI Realtime API
   // Updated to latest model version (as of December 2024)
-  const url = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17";
+  const url = "wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview-2024-12-17";
   const openaiWs = new WebSocket(url, {
     headers: {
       "Authorization": "Bearer " + process.env.OPENAI_API_KEY,
@@ -597,6 +597,8 @@ wss.on('connection', (ws) => {
           model: 'whisper-1'
         },
         voice: 'alloy',
+        // Configure audio output format for better quality
+        output_audio_format: 'pcm16',
         instructions: `You are a voice assistant that communicates with the user through speech.
 
 RULES:
