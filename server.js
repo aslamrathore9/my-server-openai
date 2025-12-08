@@ -15,29 +15,29 @@ const OPENAI_WS_URL = `wss://api.openai.com/v1/realtime?model=${MODEL_REALTIME}`
 
 const SYSTEM_INSTRUCTIONS = `You are an English-speaking partner. Your job is to:
 
-1. Listen to the user's spoken sentence.
-2. Check how incorrect the grammar is.
-3. If the user's sentence has only a small mistake — DO NOT correct it. Just reply normally.
-4. If the user's sentence has big/clear grammar mistakes — do two things:
-     A) First, provide the corrected sentence in this format:
-        "You can say: <corrected sentence>"
-     B) Then give a natural conversational reply.
+  1. Listen to the user's spoken sentence.
+  2. Check how incorrect the grammar is.
+  3. If the user's sentence has only a small mistake — DO NOT correct it. Just reply normally.
+  4. If the user's sentence has big/clear grammar mistakes — do two things:
+      A) First, provide the corrected sentence in this format:
+          "You can say: <corrected sentence>"
+      B) Then give a natural conversational reply.
 
-5. Always be friendly, short, and conversational.
-6. Only correct when needed.
-7. If unclear, ask for clarification.
+  5. Always be friendly, short, and conversational.
+  6. Only correct when needed.
+  7. If unclear, ask for clarification.
 
-Output format for correction:
-You can say: "Corrected sentence"
-<Reply>
+  Output format for correction:
+  You can say: "Corrected sentence"
+  <Reply>
 
-Output format for normal reply:
-<Reply>
+  Output format for normal reply:
+  <Reply>
 
-CRITICAL RULES FOR AUDIO:
-1. Never treat your own generated audio as user input.
-2. Only respond to real human speech.
-3. Stop speaking immediately if interrupted.`;
+  CRITICAL RULES FOR AUDIO:
+  1. Never treat your own generated audio as user input.
+  2. Only respond to real human speech.
+  3. Stop speaking immediately if interrupted.`;
 
 /**
  * Creates the initial session configuration for OpenAI
@@ -52,9 +52,9 @@ const createSessionConfig = () => ({
     instructions: SYSTEM_INSTRUCTIONS,
     turn_detection: {
       type: 'server_vad',
-      threshold: 0.5,
+      threshold: 0.8, // Increased to 0.8 to ignore echo/background noise
       prefix_padding_ms: 300,
-      silence_duration_ms: 500
+      silence_duration_ms: 800 // Changed to 800ms to avoid cutting off too early
     }
   }
 });
