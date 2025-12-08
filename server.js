@@ -1,553 +1,19 @@
 import dotenv from "dotenv";
+import express from "express";
+import http from "http";
+import { WebSocketServer, WebSocket } from "ws";
+
 dotenv.config();
 
-import express from "express";
-import cors from "cors";
-import multer from "multer";
-import fs from "fs";
-
-import OpenAI from "openai";
-
-
-const app = express();
-const port = process.env.PORT || 3000;
-
-
-
-// Middleware
-app.use(cors());
-app.use(express.json());
-
-// File upload
-const upload = multer({ storage: multer.memoryStorage() });
-
-// New OpenAI client
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
-
-// TRANSCRIBE ENDPOINT with optimization and validation
-app.post('/transcribe', upload.single('audio'), async (req, res) => {
-  console.log('File info:', req.file);
-
-  try {
-    // Validation: Check if file exists
-    if (!req.file) {
-      return res.status(400).json({ error: "No audio file uploaded" });
-    }
-
-    // Validation: File size limit (5 MB max for fast uploads)
-    const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
-    if (req.file.size > MAX_FILE_SIZE) {
-      fs.unlinkSync(req.file.path); // Clean up
-      return res.status(400).json({
-        error: `File too large: ${(req.file.size / 1024 / 1024).toFixed(2)} MB. Maximum allowed: 5 MB. Please record shorter clips (max 30 seconds).`
-      });
-    }
-
-    // Validation: Minimum file size (prevent empty/corrupt files)
-    if (req.file.size < 1000) { // Less than 1 KB is suspicious
-      fs.unlinkSync(req.file.path);
-      return res.status(400).json({ error: "Audio file appears to be empty or corrupted" });
-    }
-
-    // Detect and handle file extension based on mimetype or original filename
-    let fileExtension = 'wav';
-    const originalName = req.file.originalname?.toLowerCase() || '';
-    const mimetype = req.file.mimetype?.toLowerCase() || '';
-
-    // Supported formats by OpenAI Whisper
-    if (originalName.includes('.ogg') || originalName.includes('.opus') || mimetype.includes('ogg') || mimetype.includes('opus')) {
-      fileExtension = 'ogg';
-    } else if (originalName.includes('.flac') || mimetype.includes('flac')) {
-      fileExtension = 'flac';
-    } else if (originalName.includes('.mp3') || mimetype.includes('mp3')) {
-      fileExtension = 'mp3';
-    } else if (originalName.includes('.m4a') || mimetype.includes('m4a')) {
-      fileExtension = 'm4a';
-    } else {
-      fileExtension = 'wav'; // Default to WAV
-    }
-
-    // Estimate duration for logging (rough estimate: 16kHz mono 16-bit = 32KB per second)
-    const estimatedDuration = Math.round((req.file.size / 32000) * 100) / 100;
-    console.log(`Processing audio (RAM): ${(req.file.size / 1024).toFixed(2)} KB, estimated duration: ~${estimatedDuration}s`);
-
-    // Create a File object-like structure that OpenAI accepts
-    // We can use the 'toFile' helper from OpenAI if available, or just construct a Blob/File if Node environment supports it.
-    // However, the simplest way compatible with the v4 SDK that expects a 'file' argument is to pass a ReadStream if using 'fs',
-    // OR use the 'toFile' helper from openai/uploads.
-
-    // Since we are in Node and want to avoid disk I/O, we can convert the buffer to a helper file object.
-    const file = await OpenAI.toFile(req.file.buffer, `audio.${fileExtension}`, { type: mimetype || 'audio/wav' });
-
-    const openaiResponse = await openai.audio.transcriptions.create({
-      file: file,
-      model: 'whisper-1',
-    });
-
-    res.json({ text: openaiResponse.text });
-  } catch (e) {
-    console.error('Transcription error:', e);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// TTS (Text-to-Speech) ENDPOINT
-app.post('/tts', async (req, res) => {
-  try {
-    const { model = "tts-1", voice = "alloy", input } = req.body;
-
-    if (!input) {
-      return res.status(400).json({ error: "Text input is required" });
-    }
-
-    // Call OpenAI TTS API with streaming
-    const response = await openai.audio.speech.create({
-      model: model,
-      voice: voice,
-      input: input,
-      response_format: 'mp3',
-    });
-
-    // Set headers for partial content / streaming
-    res.setHeader('Content-Type', 'audio/mpeg');
-
-    // Pipe the stream directly to the response
-    // For Node-compatible formatting from OpenAI V4 SDK:
-    const stream = response.body;
-    stream.pipe(res);
-  } catch (e) {
-    console.error('TTS error:', e);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// CHAT ENDPOINT
-app.post("/chat", async (req, res) => {
-  try {
-    const { userText, conversationHistory } = req.body;
-
-    const systemPrompt = `You are a friendly English tutor helping a student practice speaking English through natural conversation.
-
-CRITICAL: You MUST ALWAYS respond in this EXACT format (no exceptions):
-
-Corrected: [the corrected version of the user's sentence]
-Reply: [your short conversational reply]
-
-IMPORTANT RULES:
-1. ALWAYS start with "Corrected:" followed by the corrected sentence
-2. ALWAYS follow with "Reply:" followed by your response
-3. If the user's sentence is already correct, repeat it exactly in the "Corrected:" line
-4. Keep replies short (1-2 sentences maximum)
-5. Be warm, encouraging, and supportive
-6. Maintain conversation context from previous messages
-
-Example format:
-Corrected: How are you doing today?
-Reply: I'm doing great! How about you? What are you up to?
-
-REMEMBER: Your response MUST start with "Corrected:" and include "Reply:" - this format is mandatory!`;
-
-    let messages = [{ role: "system", content: systemPrompt }];
-
-    // OPTIMIZATION: Limit conversation history to reduce cost and improve performance
-    // Only keep the most recent conversation turns for context
-    // Configurable via environment variable (default: 5 turns - optimal for sentence corrections)
-    const MAX_HISTORY_TURNS = parseInt(process.env.MAX_CONVERSATION_HISTORY_TURNS || "5", 10);
-
-    if (Array.isArray(conversationHistory) && conversationHistory.length > 0) {
-      // Take only the last MAX_HISTORY_TURNS turns
-      const limitedHistory = conversationHistory.slice(-MAX_HISTORY_TURNS);
-
-      console.log(`Conversation history: ${conversationHistory.length} turns, using last ${limitedHistory.length} turns`);
-
-      limitedHistory.forEach((turn) => {
-        // Truncate very long messages to prevent excessive tokens
-        const MAX_MESSAGE_LENGTH = 500; // characters
-        const userMsg = turn.user && turn.user.length > MAX_MESSAGE_LENGTH
-          ? turn.user.substring(0, MAX_MESSAGE_LENGTH) + "..."
-          : turn.user;
-        const aiMsg = turn.ai && turn.ai.length > MAX_MESSAGE_LENGTH
-          ? turn.ai.substring(0, MAX_MESSAGE_LENGTH) + "..."
-          : turn.ai;
-
-        messages.push({ role: "user", content: userMsg });
-        messages.push({ role: "assistant", content: aiMsg });
-      });
-
-      // Log token estimation (rough: ~4 characters per token)
-      const estimatedTokens = messages.reduce((sum, msg) => sum + (msg.content?.length || 0) / 4, 0);
-      console.log(`Estimated tokens: ~${Math.round(estimatedTokens)} (history: ${limitedHistory.length} turns)`);
-    }
-
-    messages.push({ role: "user", content: userText });
-
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages,
-      temperature: 0.7, // Lower temperature for more consistent format following
-      max_tokens: 200, // Limit response length to keep it concise
-    });
-
-    const content = completion.choices[0].message.content;
-
-    // More robust parsing with multiple fallback strategies
-    let corrected = "";
-    let reply = "";
-
-    // Strategy 1: Look for explicit "Corrected:" and "Reply:" labels
-    const correctedMatch = /Corrected:\s*([\s\S]*?)(?=\s*Reply:|$)/i.exec(content);
-    const replyMatch = /Reply:\s*([\s\S]*?)$/i.exec(content);
-
-    if (correctedMatch && replyMatch) {
-      corrected = correctedMatch[1].trim();
-      reply = replyMatch[1].trim();
-    } else {
-      // Strategy 2: If format not found, try to extract from lines
-      const lines = content.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-
-      for (let i = 0; i < lines.length; i++) {
-        if (lines[i].toLowerCase().startsWith('corrected:')) {
-          corrected = lines[i].substring(10).trim();
-        } else if (lines[i].toLowerCase().startsWith('reply:')) {
-          reply = lines[i].substring(6).trim();
-          // Also check next lines in case reply spans multiple lines
-          if (reply === "" && i + 1 < lines.length) {
-            reply = lines.slice(i + 1).join(' ').trim();
-          }
-          break;
-        }
-      }
-
-      // Strategy 3: If still no format, use the original text as corrected and entire response as reply
-      if (!corrected && !reply) {
-        corrected = userText; // Fallback to original user text
-        reply = content.trim();
-        console.warn('Warning: AI response did not follow format. Using fallback parsing.');
-      }
-    }
-
-    // Final validation - ensure we have at least something
-    if (!corrected || corrected.length === 0) {
-      corrected = userText; // Fallback to original if empty
-    }
-    if (!reply || reply.length === 0) {
-      reply = content.trim() || "I understand!"; // Fallback reply
-    }
-
-    res.json({
-      corrected: corrected,
-      reply: reply,
-      raw: content
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// CONVERSE ENDPOINT (One-Shot: Audio -> Audio)
-// Combines Transcribe + Chat + TTS for lowest latency
-app.post('/converse', upload.single('audio'), async (req, res) => {
-  try {
-    console.log(`Converse Request received`);
-
-    // 1. Transcribe
-    if (!req.file) return res.status(400).json({ error: "No audio file" });
-
-    // Quick validation
-    if (req.file.size > 5 * 1024 * 1024) return res.status(400).json({ error: "File too large" });
-
-    const file = await OpenAI.toFile(req.file.buffer, "audio.wav");
-
-    // Start Transcription
-    const transcriptResponse = await openai.audio.transcriptions.create({
-      file: file,
-      model: 'whisper-1',
-    });
-
-    const userText = transcriptResponse.text;
-    console.log(`Transcribed: "${userText}"`);
-
-    // 2. Set Header for Client UI (Instant "You said")
-    // Use Base64 to avoid encoding issues with special chars
-    res.setHeader('X-Transcript-B64', Buffer.from(userText).toString('base64'));
-    res.setHeader('Content-Type', 'audio/mpeg');
-    res.setHeader('Transfer-Encoding', 'chunked');
-
-    // 3. Chat & Stream
-    // Parse history from body text field (Multer puts text fields in req.body)
-    let conversationHistory = [];
-    try {
-      if (req.body.conversationHistory) {
-        conversationHistory = JSON.parse(req.body.conversationHistory);
-      }
-    } catch (e) { console.warn("History parse error", e); }
-
-    const messages = [{
-      role: "system",
-      content: `You are a friendly English tutor. Respond with a short conversational reply only. No corrections. Keep it natural and under 2 sentences.`
-    }];
-
-    // Add history
-    const MAX_HISTORY_TURNS = 5;
-    if (Array.isArray(conversationHistory) && conversationHistory.length > 0) {
-      conversationHistory.slice(-MAX_HISTORY_TURNS).forEach(t => {
-        messages.push({ role: "user", content: t.user });
-        messages.push({ role: "assistant", content: t.ai });
-      });
-    }
-    messages.push({ role: "user", content: userText });
-
-    const stream = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages,
-      stream: true,
-      max_tokens: 200,
-    });
-
-    let sentenceBuffer = "";
-
-    for await (const chunk of stream) {
-      const token = chunk.choices[0]?.delta?.content || "";
-      sentenceBuffer += token;
-
-      if (/[.?!]\s/.test(sentenceBuffer) || (sentenceBuffer.length > 50 && /[.?!]$/.test(sentenceBuffer))) {
-        const sentence = sentenceBuffer.trim();
-        if (sentence.length > 0) {
-          console.log(`Converse TTS: "${sentence}"`);
-          await streamTtsToResponse(sentence, res);
-          sentenceBuffer = "";
-        }
-      }
-    }
-
-    if (sentenceBuffer.trim().length > 0) {
-      console.log(`Converse TTS (Final): "${sentenceBuffer}"`);
-      await streamTtsToResponse(sentenceBuffer, res);
-    }
-
-    res.end();
-
-  } catch (e) {
-    console.error('Converse Error:', e);
-    if (!res.headersSent) res.status(500).json({ error: e.message });
-    else res.end();
-  }
-});
-
-// SMART STREAMING ENDPOINT for low latency (<4s)
-// 1. Streams text from GPT-4
-// 2. Detects 'Reply:'
-// 3. Sentences are sent to TTS immediately
-// 4. Audio is streamed back to client
-app.post('/chat-audio-stream', async (req, res) => {
-  try {
-    const { userText, conversationHistory } = req.body;
-    console.log(`Smart Stream Request: "${userText}"`);
-
-    // Prepare messages
-    const systemPrompt = `You are a friendly English tutor.
-CRITICAL: You MUST ALWAYS respond with a short conversational reply only.
-Rules:
-1. Do NOT provide corrections.
-2. Keep replies short (1-2 sentences).
-3. Be natural and encouraging.`;
-
-    let messages = [{ role: "system", content: systemPrompt }];
-
-    // History handling (same as before)
-    const MAX_HISTORY_TURNS = 5;
-    if (Array.isArray(conversationHistory) && conversationHistory.length > 0) {
-      const limited = conversationHistory.slice(-MAX_HISTORY_TURNS);
-      limited.forEach(t => {
-        messages.push({ role: "user", content: t.user });
-        messages.push({ role: "assistant", content: t.ai });
-      });
-    }
-    messages.push({ role: "user", content: userText });
-
-    // Header for streaming audio
-    res.setHeader('Content-Type', 'audio/mpeg');
-    res.setHeader('Transfer-Encoding', 'chunked');
-
-    // State machine for parsing
-    let buffer = "";
-    let isReply = false;
-    let sentenceBuffer = "";
-    let correctedSentence = ""; // We might want to send this back in a header or separate event, but for now we focus on audio.
-    // Actually, client needs the text too.
-    // PROBLEM: We are streaming AUDIO data. We can't easily mix JSON text data in the same stream without a custom protocol.
-    // COMPROMISE: We will log the text on server, and maybe send it as a custom HTTP header at the end?
-    // No, HTTP headers must be sent first.
-    // SOLUTION for now: We only stream audio. The client will just play audio.
-    // The "transcript" update on UI will be delayed or we can use a separate call?
-    // OR: We can use Multipart response? Too complex for Android client.
-    // SIMPLEST: This endpoint returns AUDIO. The client updates UI with "Listening..." -> "Playing...".
-    // We lose the text display update for "Corrected" text immediately, but we gain speed.
-    // We can send the "Corrected" and "Reply" text in a HEADER if it's short enough?
-    // Yes, we can set headers before the first audio chunk if we buffer just enough to find the "Corrected" part.
-    // GPT-4 generates "Corrected:" FIRST. So we can grab that, set header, then stream audio.
-
-    const stream = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages,
-      stream: true,
-      max_tokens: 200,
-    });
-
-    for await (const chunk of stream) {
-      const token = chunk.choices[0]?.delta?.content || "";
-      buffer += token;
-      sentenceBuffer += token;
-
-      // Detect sentence end (. ? !)
-      if (/[.?!]\s/.test(sentenceBuffer) || (sentenceBuffer.length > 50 && /[.?!]$/.test(sentenceBuffer))) {
-        const sentence = sentenceBuffer.trim();
-        if (sentence.length > 0) {
-          console.log(`TTS Processing: "${sentence}"`);
-          await streamTtsToResponse(sentence, res);
-          sentenceBuffer = "";
-        }
-      }
-    }
-
-    // Process remaining buffer
-    // Process remaining buffer
-    if (sentenceBuffer.trim().length > 0) {
-      console.log(`TTS Processing (Final): "${sentenceBuffer}"`);
-      await streamTtsToResponse(sentenceBuffer, res);
-    }
-
-    // Add valid JSON object at the end? No, MP3 stream.
-    res.end();
-
-  } catch (e) {
-    console.error('Smart Stream Error:', e);
-    // If headers sent, we can't send JSON error.
-    if (!res.headersSent) {
-      res.status(500).json({ error: e.message });
-    } else {
-      res.end();
-    }
-  }
-});
-
-// Helper to send TTS audio to response stream
-async function streamTtsToResponse(text, res) {
-  try {
-    const mp3Response = await openai.audio.speech.create({
-      model: "tts-1",
-      voice: "alloy",
-      input: text,
-      response_format: "mp3"
-    });
-
-    // We get a ReadableStream (web standard) or buffer.
-    // V4 SDK returns a Response-like object.
-    // We can get buffer() or body (stream).
-    const buffer = Buffer.from(await mp3Response.arrayBuffer());
-    res.write(buffer);
-    // Note: We are writing MP3 frames back-to-back.
-    // Most players (ExoPlayer, VLC) handle concatenated MP3s fine!
-  } catch (e) {
-    console.error("TTS Segment Error:", e);
-  }
-}
-
-
-
-/**
- * Health check endpoint
- */
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString()
-  });
-});
-
 // ==========================================
-// REALTIME WEBSOCKET SETUP
+// CONSTANTS & CONFIGURATION
 // ==========================================
-import http from 'http';
-import { WebSocketServer } from 'ws';
-import WebSocket from 'ws';
+const PORT = process.env.PORT || 3000;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const MODEL_REALTIME = "gpt-4o-mini-realtime-preview";
+const OPENAI_WS_URL = `wss://api.openai.com/v1/realtime?model=${MODEL_REALTIME}`;
 
-// Create HTTP server from Express app
-const server = http.createServer(app);
-
-// Attach WebSocket Server to the same HTTP server
-const wss = new WebSocketServer({ server });
-
-wss.on('connection', (ws) => {
-  console.log("Client connected to WebSocket");
-
-  let isOpenAIConnected = false;
-
-  // Connect to OpenAI Realtime API
-  // Updated to latest model version (as of December 2024)
-  const url = "wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview";
-  const openaiWs = new WebSocket(url, {
-    headers: {
-      "Authorization": "Bearer " + process.env.OPENAI_API_KEY,
-      "OpenAI-Beta": "realtime=v1",
-    },
-  });
-
-  // Relay: Client -> OpenAI
-  ws.on('message', (message) => {
-    try {
-      if (!isOpenAIConnected) {
-        console.log("Buffering message until OpenAI connects...");
-        return; // Or buffer? For simplicity, we drop or client should wait.
-      }
-
-      const msgStr = message.toString();
-      // Check if it's raw binary data?
-      // Our client sends raw bytes.
-      // BUT the WS lib usually gives us a Buffer.
-      // If it's a Buffer, we assume it's audio.
-
-      // However, we need to wrap it in the JSON event for OpenAI: 'input_audio_buffer.append'
-      // If the client implemented `sendRealtimeAudio` sending raw bytes:
-      if (Buffer.isBuffer(message) || (typeof message !== 'string' && !msgStr.trim().startsWith('{'))) {
-        // It's likely audio bytes
-        const audioBase64 = message.toString('base64');
-        const audioEvent = {
-          type: 'input_audio_buffer.append',
-          audio: audioBase64
-        };
-        openaiWs.send(JSON.stringify(audioEvent));
-      } else {
-        // It's likely a JSON control message (if we implement those later)
-        // Check if it's valid JSON
-        if (msgStr.trim().startsWith('{')) {
-          openaiWs.send(msgStr);
-        }
-      }
-    } catch (e) {
-      console.error("Relay error client->openai", e);
-    }
-  });
-
-  // Relay: OpenAI -> Client
-  openaiWs.on('open', () => {
-    console.log("Connected to OpenAI Realtime");
-    isOpenAIConnected = true;
-
-    // Initialize Session
-    const sessionConfig = {
-      type: 'session.update',
-      session: {
-        modalities: ['text', 'audio'],
-        input_audio_transcription: {
-          model: 'whisper-1'
-        },
-        voice: 'alloy',
-        // Configure audio output format for better quality
-        output_audio_format: 'pcm16',
-        instructions: `You are an English-speaking partner. Your job is to:
+const SYSTEM_INSTRUCTIONS = `You are an English-speaking partner. Your job is to:
 
 1. Listen to the user's spoken sentence.
 2. Check how incorrect the grammar is.
@@ -557,63 +23,144 @@ wss.on('connection', (ws) => {
         "You can say: <corrected sentence>"
      B) Then give a natural conversational reply.
 
-5. Always be friendly, short, and conversational — like real humans talk.
-6. Never mention grammar level or errors directly. Only correct when needed.
-7. If the user's sentence is completely unclear, ask politely for clarification.
-8. Continue conversation on any topic freely (no restrictions).
+5. Always be friendly, short, and conversational.
+6. Only correct when needed.
+7. If unclear, ask for clarification.
 
-Output format when correcting a big mistake:
+Output format for correction:
 You can say: "Corrected sentence"
-<Normal conversational reply>
+<Reply>
 
-Output format when the sentence is mostly correct:
-<Only conversational reply>
+Output format for normal reply:
+<Reply>
 
 CRITICAL RULES FOR AUDIO:
 1. Never treat your own generated audio as user input.
-2. Only respond to real human speech detected from the microphone.
-3. While you are speaking, pause listening to prevent self-loop.
-4. If the human interrupts while you are speaking, stop immediately and listen.`,
-        turn_detection: {
-          type: 'server_vad',
-          threshold: 0.5,
-          prefix_padding_ms: 300,
-          silence_duration_ms: 500
-        }
-      }
-    };
-    openaiWs.send(JSON.stringify(sessionConfig));
-  });
+2. Only respond to real human speech.
+3. Stop speaking immediately if interrupted.`;
 
-  openaiWs.on('message', (data) => {
+/**
+ * Creates the initial session configuration for OpenAI
+ */
+const createSessionConfig = () => ({
+  type: 'session.update',
+  session: {
+    modalities: ['text', 'audio'],
+    input_audio_transcription: { model: 'whisper-1' },
+    voice: 'alloy',
+    output_audio_format: 'pcm16',
+    instructions: SYSTEM_INSTRUCTIONS,
+    turn_detection: {
+      type: 'server_vad',
+      threshold: 0.5,
+      prefix_padding_ms: 300,
+      silence_duration_ms: 500
+    }
+  }
+});
+
+// ==========================================
+// SERVER SETUP
+// ==========================================
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server });
+
+// Minimal Health Check
+app.get('/health', (_, res) => res.json({ status: 'ok', version: '1.0.0' }));
+
+// ==========================================
+// WEBSOCKET HANDLER
+// ==========================================
+wss.on('connection', (clientWs) => {
+  console.log("Client connected. Initializing OpenAI Realtime...");
+
+  let openaiWs = null;
+  let isConnected = false;
+  let retryCount = 0;
+  const MAX_RETRIES = 5;
+
+  const connectToOpenAI = () => {
     try {
-      const eventStr = data.toString();
-      // Forward everything to client
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(eventStr);
+      openaiWs = new WebSocket(OPENAI_WS_URL, {
+        headers: {
+          "Authorization": `Bearer ${OPENAI_API_KEY}`,
+          "OpenAI-Beta": "realtime=v1",
+        },
+      });
+
+      openaiWs.on('open', () => {
+        console.log("Connected to OpenAI Realtime.");
+        isConnected = true;
+        retryCount = 0;
+        openaiWs.send(JSON.stringify(createSessionConfig()));
+      });
+
+      openaiWs.on('message', (data) => {
+        if (clientWs.readyState === WebSocket.OPEN) {
+          clientWs.send(data.toString());
+        }
+      });
+
+      openaiWs.on('error', (e) => console.error("OpenAI WS Error:", e.message));
+
+      openaiWs.on('close', () => {
+        console.log("OpenAI WS Closed.");
+        isConnected = false;
+        handleReconnect();
+      });
+
+    } catch (e) {
+      console.error("Connection setup error:", e);
+      closeClient(1011, "Internal Error");
+    }
+  };
+
+  const handleReconnect = () => {
+    if (clientWs.readyState === WebSocket.OPEN && retryCount < MAX_RETRIES) {
+      retryCount++;
+      const delay = Math.min(1000 * Math.pow(2, retryCount), 10000);
+      console.log(`Reconnecting to OpenAI in ${delay}ms (Attempt ${retryCount}/${MAX_RETRIES})...`);
+      setTimeout(connectToOpenAI, delay);
+    } else {
+      closeClient(1011, "OpenAI Service Unavailable");
+    }
+  };
+
+  const closeClient = (code, reason) => {
+    if (clientWs.readyState === WebSocket.OPEN) clientWs.close(code, reason);
+  };
+
+  // Start Connection
+  connectToOpenAI();
+
+  // Handle Client Messages
+  clientWs.on('message', (message) => {
+    if (!isConnected || !openaiWs || openaiWs.readyState !== WebSocket.OPEN) return;
+
+    try {
+      const msgStr = message.toString();
+      // Send JSON control messages directly, wrap binary audio in event
+      if (msgStr.trim().startsWith('{')) {
+        openaiWs.send(msgStr);
+      } else {
+        const audioBase64 = message.toString('base64');
+        openaiWs.send(JSON.stringify({
+          type: 'input_audio_buffer.append',
+          audio: audioBase64
+        }));
       }
     } catch (e) {
-      console.error("Relay error openai->client", e);
+      console.error("Relay error:", e);
     }
   });
 
-  openaiWs.on('error', (e) => console.error("OpenAI WS Error", e));
-
-  openaiWs.on('close', () => {
-    console.log("OpenAI WS Closed");
-    // Close client too?
-    if (ws.readyState === WebSocket.OPEN) ws.close();
-  });
-
-  ws.on('close', () => {
-    console.log("Client disconnected");
-    if (openaiWs.readyState === WebSocket.OPEN) openaiWs.close();
+  clientWs.on('close', () => {
+    console.log("Client disconnected.");
+    if (openaiWs?.readyState === WebSocket.OPEN) openaiWs.close();
   });
 });
 
-// Start the HTTP+WS server j
-server.listen(port, () => {
-  console.log(`Server (HTTP+WS) live on port ${port}`);
-  console.log(`Server (HTTP+WS) live on port ${port}`);
+server.listen(PORT, () => {
+  console.log(`WebSocket Server running on port ${PORT}`);
 });
-
