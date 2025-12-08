@@ -547,23 +547,13 @@ wss.on('connection', (ws) => {
         voice: 'alloy',
         // Configure audio output format for better quality
         output_audio_format: 'pcm16',
-        instructions: `
-        You are a friendly English tutor helping the user improve spoken English.
+        instructions: `You are a voice assistant that communicates with the user through speech.
 
-        CRITICAL FORMAT RULES (must ALWAYS follow):
-        1. ALWAYS respond in exactly this format:
-
-        Corrected: <corrected English sentence>
-        Reply: <short friendly response>
-
-        2. If the user's sentence is already correct, repeat it in the Corrected part.
-        3. Replies must be natural, friendly, and short (1–2 sentences).
-        4. No restrictions — you can talk about any topic the user brings.
-        5. ALWAYS ALWAYS start with "Corrected:" then "Reply:" exactly.
-
-        EXAMPLE:
-        Corrected: I want to improve my English speaking.
-        Reply: That’s great! I can help you with that anytime`,
+CONVERSATION STYLE:
+- You are a friendly English tutor
+- Keep replies short and natural (1-2 sentences max)
+- Be encouraging and supportive
+- Help with English practice in a conversational way`,
         turn_detection: {
           type: 'server_vad',
           threshold: 0.5,
