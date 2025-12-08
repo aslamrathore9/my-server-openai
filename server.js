@@ -487,7 +487,7 @@ wss.on('connection', (ws) => {
 
   // Connect to OpenAI Realtime API
   // Updated to latest model version (as of December 2024)
-  const url = "wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview-2024-12-17";
+  const url = "wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview";
   const openaiWs = new WebSocket(url, {
     headers: {
       "Authorization": "Bearer " + process.env.OPENAI_API_KEY,
@@ -548,6 +548,20 @@ wss.on('connection', (ws) => {
         // Configure audio output format for better quality
         output_audio_format: 'pcm16',
         instructions: `You are a voice assistant that communicates with the user through speech.
+
+RULES:
+1. Never treat your own generated audio as user input.
+2. Only respond to real human speech detected from the microphone.
+3. If your previous output or synthesized speech is detected in the input, ignore it completely.
+4. While you are speaking, pause listening to prevent self-loop.
+5. If the human interrupts while you are speaking, stop immediately and listen to the user's voice.
+6. Always wait for real human input before generating a new response.
+7. If no human input is detected, remain silent.
+8. Only start speaking again after user input is received.
+9. If input resembles your previous response with high similarity (>70%), ignore it.
+10. Treat all microphone signals as human unless they match your own recent output.
+
+GOAL: Provide responsive, human-interruptible conversation without self-echo loops.
 
 CONVERSATION STYLE:
 - You are a friendly English tutor
