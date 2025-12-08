@@ -135,20 +135,21 @@ wss.on('connection', (clientWs) => {
   connectToOpenAI();
 
   // Handle Client Messages
-  clientWs.on('message', (message) => {
+  clientWs.on('message', (message, isBinary) => {
     if (!isConnected || !openaiWs || openaiWs.readyState !== WebSocket.OPEN) return;
 
     try {
-      const msgStr = message.toString();
-      // Send JSON control messages directly, wrap binary audio in event
-      if (msgStr.trim().startsWith('{')) {
-        openaiWs.send(msgStr);
-      } else {
+      // Robust Check: Use isBinary flag from WS library
+      if (isBinary) {
+        // Binary Audio -> Wrap in JSON event
         const audioBase64 = message.toString('base64');
         openaiWs.send(JSON.stringify({
           type: 'input_audio_buffer.append',
           audio: audioBase64
         }));
+      } else {
+        // Text Message -> Forward directly (JSON)
+        openaiWs.send(message.toString());
       }
     } catch (e) {
       console.error("Relay error:", e);
