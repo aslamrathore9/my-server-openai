@@ -64,104 +64,41 @@ const createSessionConfig = () => ({
 // ==========================================
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
 
 // Minimal Health Check
 app.get('/health', (_, res) => res.json({ status: 'ok', version: '1.0.0' }));
 
 // ==========================================
-// WEBSOCKET HANDLER
+// EPHEMERAL TOKEN ENDPOINT
 // ==========================================
-wss.on('connection', (clientWs) => {
-  console.log("Client connected. Initializing OpenAI Realtime...");
+app.get('/session', async (_, res) => {
+  try {
+    const response = await fetch("https://api.openai.com/v1/realtime/sessions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: MODEL_REALTIME,
+        voice: "alloy",
+        instructions: SYSTEM_INSTRUCTIONS,
+      }),
+    });
 
-  let openaiWs = null;
-  let isConnected = false;
-  let retryCount = 0;
-  const MAX_RETRIES = 5;
-
-  const connectToOpenAI = () => {
-    try {
-      openaiWs = new WebSocket(OPENAI_WS_URL, {
-        headers: {
-          "Authorization": `Bearer ${OPENAI_API_KEY}`,
-          "OpenAI-Beta": "realtime=v1",
-        },
-      });
-
-      openaiWs.on('open', () => {
-        console.log("Connected to OpenAI Realtime.");
-        isConnected = true;
-        retryCount = 0;
-        openaiWs.send(JSON.stringify(createSessionConfig()));
-      });
-
-      openaiWs.on('message', (data) => {
-        if (clientWs.readyState === WebSocket.OPEN) {
-          clientWs.send(data.toString());
-        }
-      });
-
-      openaiWs.on('error', (e) => console.error("OpenAI WS Error:", e.message));
-
-      openaiWs.on('close', () => {
-        console.log("OpenAI WS Closed.");
-        isConnected = false;
-        handleReconnect();
-      });
-
-    } catch (e) {
-      console.error("Connection setup error:", e);
-      closeClient(1011, "Internal Error");
+    if (!response.ok) {
+      throw new Error(`OpenAI API error: ${response.statusText}`);
     }
-  };
 
-  const handleReconnect = () => {
-    if (clientWs.readyState === WebSocket.OPEN && retryCount < MAX_RETRIES) {
-      retryCount++;
-      const delay = Math.min(1000 * Math.pow(2, retryCount), 10000);
-      console.log(`Reconnecting to OpenAI in ${delay}ms (Attempt ${retryCount}/${MAX_RETRIES})...`);
-      setTimeout(connectToOpenAI, delay);
-    } else {
-      closeClient(1011, "OpenAI Service Unavailable");
-    }
-  };
+    const data = await response.json();
+    res.json(data);
 
-  const closeClient = (code, reason) => {
-    if (clientWs.readyState === WebSocket.OPEN) clientWs.close(code, reason);
-  };
-
-  // Start Connection
-  connectToOpenAI();
-
-  // Handle Client Messages
-  clientWs.on('message', (message, isBinary) => {
-    if (!isConnected || !openaiWs || openaiWs.readyState !== WebSocket.OPEN) return;
-
-    try {
-      // Robust Check: Use isBinary flag from WS library
-      if (isBinary) {
-        // Binary Audio -> Wrap in JSON event
-        const audioBase64 = message.toString('base64');
-        openaiWs.send(JSON.stringify({
-          type: 'input_audio_buffer.append',
-          audio: audioBase64
-        }));
-      } else {
-        // Text Message -> Forward directly (JSON)
-        openaiWs.send(message.toString());
-      }
-    } catch (e) {
-      console.error("Relay error:", e);
-    }
-  });
-
-  clientWs.on('close', () => {
-    console.log("Client disconnected.");
-    if (openaiWs?.readyState === WebSocket.OPEN) openaiWs.close();
-  });
+  } catch (e) {
+    console.error("Token generation error:", e);
+    res.status(500).json({ error: "Failed to generate session token" });
+  }
 });
 
 server.listen(PORT, () => {
-  console.log(`WebSocket Server running on port ${PORT}`);
+  console.log(`Token Server running on port ${PORT}`);
 });
