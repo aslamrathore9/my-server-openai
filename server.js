@@ -71,8 +71,42 @@ app.get('/health', (_, res) => res.json({ status: 'ok', version: '1.0.0' }));
 // ==========================================
 // EPHEMERAL TOKEN ENDPOINT
 // ==========================================
-app.get('/session', async (_, res) => {
+app.get('/session', async (req, res) => {
   try {
+    const { topic } = req.query;
+    let currentInstructions = SYSTEM_INSTRUCTIONS;
+
+    if (topic) {
+        console.log(`Setting up session for topic: ${topic}`);
+        switch (topic) {
+            case 'daily_routine':
+                currentInstructions += "\n\nCONTEXT: The user wants to talk about their daily routine. Ask them about their day, what they do in the morning, etc.";
+                break;
+            case 'improve_vocabulary':
+                currentInstructions += "\n\nCONTEXT: The user wants to improve vocabulary. Use more advanced words in your replies and explain them if needed. Suggest better synonyms for words the user uses.";
+                break;
+            case 'childhood_memory':
+                currentInstructions += "\n\nCONTEXT: The user wants to talk about childhood memories. Ask them about their favorite memory, school days, or friends from childhood.";
+                break;
+            case 'intro_practice':
+                currentInstructions += "\n\nCONTEXT: This is an interview practice. Ask the user to introduce themselves. Provide feedback on their introduction.";
+                break;
+            case 'career_plans':
+                currentInstructions += "\n\nCONTEXT: This is an interview practice. Ask the user about their short-term and long-term career plans.";
+                break;
+            case 'govt_interview':
+                currentInstructions += "\n\nCONTEXT: This is a UPSC (Civil Services) interview practice. Be formal, strict, and ask general knowledge or situational questions. Address the user as 'Candidate'.";
+                break;
+            case 'job_interview':
+                currentInstructions += "\n\nCONTEXT: This is a standard Job Interview practice. Act as a Hiring Manager. Ask about experience, strengths, and weaknesses.";
+                break;
+            case 'talk_about_anything':
+            default:
+                // Default context
+                break;
+        }
+    }
+
     const response = await fetch("https://api.openai.com/v1/realtime/sessions", {
       method: "POST",
       headers: {
@@ -82,7 +116,7 @@ app.get('/session', async (_, res) => {
       body: JSON.stringify({
         model: MODEL_REALTIME,
         voice: "alloy",
-        instructions: SYSTEM_INSTRUCTIONS,
+        instructions: currentInstructions,
       }),
     });
 
