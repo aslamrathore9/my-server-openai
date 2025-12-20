@@ -29,8 +29,8 @@ const wss = new WebSocketServer({ server });
 const sessions = new Map();
 
 // VAD Constants (Simple Energy based)
-const VAD_THRESHOLD = 0.01;      // Root Mean Square amplitude threshold
-const SILENCE_DURATION_MS = 1000; // How long to wait before processing speech
+const VAD_THRESHOLD = 0.05;      // Increased to 0.05 to ignore background noise/breathing
+const SILENCE_DURATION_MS = 1500; // Increased to 1.5s to ensure user is really finished
 const MAX_RECORDING_MS = 15000;   // Force process after 15s to avoid huge buffers
 
 // ==========================================
