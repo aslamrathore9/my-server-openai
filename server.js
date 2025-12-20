@@ -14,9 +14,9 @@ const MODEL_REALTIME = "gpt-4o-mini-realtime-preview";
 const OPENAI_WS_URL = `wss://api.openai.com/v1/realtime?model=${MODEL_REALTIME}`;
 
 const SYSTEM_INSTRUCTIONS = `
-You are an English speaking partner.
-Correct only BIG grammar mistakes.
-Be friendly and short.
+English partner.
+Fix major errors implicitly. Don't explain.
+Be friendly & short.
 `;
 
 /**
@@ -57,41 +57,57 @@ app.get('/session', async (req, res) => {
     let currentInstructions = SYSTEM_INSTRUCTIONS;
 
     if (topic) {
-        console.log(`Setting up session for topic: ${topic}`);
-        switch (topic) {
-           case 'daily_routine':
-               currentInstructions += "\nContext: Daily routine conversation.";
-               break;
+      console.log(`Setting up session for topic: ${topic}`);
+      switch (topic) {
+        case 'daily_routine':
+          currentInstructions += "\nContext: Daily routine conversation.";
+          break;
 
-           case 'improve_vocabulary':
-               currentInstructions += "\nContext: Improve vocabulary. Use better words and simple explanations.";
-               break;
+        case 'improve_vocabulary':
+          currentInstructions += "\nContext: Improve vocabulary. Use better words and simple explanations.";
+          break;
 
-           case 'childhood_memory':
-               currentInstructions += "\nContext: Talk about childhood memories.";
-               break;
+        case 'childhood_memory':
+          currentInstructions += "\nContext: Talk about childhood memories.";
+          break;
 
-           case 'intro_practice':
-               currentInstructions += "\nContext: Interview introduction practice.";
-               break;
+        case 'intro_practice':
+          currentInstructions += "\nContext: Interview introduction practice.";
+          break;
 
-           case 'career_plans':
-               currentInstructions += "\nContext: Interview questions about career plans.";
-               break;
+        case 'career_plans':
+          currentInstructions += "\nContext: Interview questions about career plans.";
+          break;
 
-           case 'govt_interview':
-               currentInstructions += "\nContext: Formal UPSC interview. Address the user as Candidate.";
-               break;
+        case 'govt_interview':
+          currentInstructions += "\nContext: Formal UPSC interview. Address the user as Candidate.";
+          break;
 
-           case 'job_interview':
-               currentInstructions += "\nContext: Job interview practice.";
-               break;
+        case 'job_interview':
+          currentInstructions += "\nContext: Job interview practice.";
+          break;
 
-           case 'talk_about_anything':
-           default:
-               // No extra context needed
-               break;
-        }
+        case 'seasons_weather':
+          currentInstructions += "\nTopic: Seasons & Weather.";
+          break;
+
+        case 'family_relationship':
+          currentInstructions += "\nTopic: Family & Relationships.";
+          break;
+
+        case 'hobbies_interests':
+          currentInstructions += "\nTopic: Hobbies & Interests.";
+          break;
+
+        case 'talk_about_your_workplace':
+          currentInstructions += "\nTopic: Workplace discussion.";
+          break;
+
+        case 'talk_about_anything':
+        default:
+          // No extra context needed
+          break;
+      }
     }
 
     const response = await fetch("https://api.openai.com/v1/realtime/sessions", {
