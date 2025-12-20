@@ -188,6 +188,9 @@ async function processAudioPipeline(sessionId, socket) {
 
     socket.send(JSON.stringify({ type: "assistant.audio.start" }));
 
+    // Gate: Mark AI as speaking so we ignore incoming echoed audio
+    session.isAiSpeaking = true;
+
     // Chunking the response to simulate valid streaming if needed, or just send it all.
     // Sending in 4kb chunks
     const CHUNK_SIZE = 4096;
@@ -197,6 +200,11 @@ async function processAudioPipeline(sessionId, socket) {
     }
 
     socket.send(JSON.stringify({ type: "assistant.audio.end" }));
+
+    // Gate: Unmark AI speaking (allow some buffer for playback to finish on client?)
+    setTimeout(() => {
+      session.isAiSpeaking = false;
+    }, 500);
 
   } catch (error) {
     console.error(`[${sessionId}] Pipeline Error:`, error);
@@ -217,7 +225,9 @@ wss.on('connection', (ws, req) => {
     history: [], // Conversation history
     audioBuffer: [], // Buffer for incoming user audio (PCM16 chunks)
     silenceStart: null, // Timestamp when silence began
+    silenceStart: null, // Timestamp when silence began
     isSpeaking: false, // Is the user currently speaking?
+    isAiSpeaking: false, // Echo Gate
     systemPrompt: BASE_SYSTEM_PROMPT,
     silenceTimer: null // Timeout for silence detection
   });
@@ -227,6 +237,7 @@ wss.on('connection', (ws, req) => {
     if (!session) return;
 
     if (isBinary) {
+      if (session.isAiSpeaking) return; // Echo/Gate check
       // --- AUDIO DATA ---
       // Received Audio Chunk (PCM 16bit, 16kHz, Mono) from Android
       const pcmChunk = message;
@@ -304,8 +315,10 @@ wss.on('connection', (ws, req) => {
           const buffer = Buffer.from(await mp3.arrayBuffer());
 
           ws.send(JSON.stringify({ type: "assistant.audio.start" }));
+          session.isAiSpeaking = true;
           ws.send(buffer); // Send all at once or chunk
           ws.send(JSON.stringify({ type: "assistant.audio.end" }));
+          setTimeout(() => { session.isAiSpeaking = false; }, 500);
         }
 
       } catch (e) {
