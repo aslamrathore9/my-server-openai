@@ -12,6 +12,11 @@ dotenv.config();
 const PORT = process.env.PORT || 3000;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server });
+
 
 // ==========================================
 // SESSION STATE
@@ -20,7 +25,7 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const sessions = new Map();
 
 // VAD Constants (Simple Energy based)
-const VAD_THRESHOLD = 0.05;      // Increased to 0.05 to ignore background noise/breathing
+const VAD_THRESHOLD = 0.02;      // Lowered to 0.02 to ensure voice is detected
 const SILENCE_DURATION_MS = 1500; // Increased to 1.5s to ensure user is really finished
 const MAX_RECORDING_MS = 15000;   // Force process after 15s to avoid huge buffers
 
@@ -330,6 +335,10 @@ wss.on('connection', (ws, req) => {
 // ==========================================
 app.get('/health', (_, res) => res.json({ status: 'ok', version: '2.0.0-standard-api' }));
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Standard API Server running on port ${PORT}`);
+});
+
+server.on('error', (err) => {
+  console.error("Server startup error:", err);
 });
