@@ -30,7 +30,7 @@ const sessions = new Map();
 
 // VAD Constants (Simple Energy based)
 const VAD_THRESHOLD = 0.02;      // Lowered to 0.02 (0.05 was too deaf)
-const SILENCE_DURATION_MS = 1200; // 1.2s silence detection
+const SILENCE_DURATION_MS = 800;  // Reduced to 0.8s for faster response (saving ~0.4s)
 const MAX_RECORDING_MS = 15000;   // Force process after 15s to avoid huge buffers
 
 // ==========================================
@@ -39,7 +39,7 @@ const MAX_RECORDING_MS = 15000;   // Force process after 15s to avoid huge buffe
 const BASE_SYSTEM_PROMPT = `
 You are a helpful and friendly English language tutor named Lyra.
 - Your goal is to help the user practice English conversation.
-- Keep your responses concise (1-3 sentences) to keep the conversation flowing.
+- Keep your responses VERY concise (1 sentence). Speed is priority.
 - Correct major grammatical errors gently, but prioritize fluency.
 - If the user asks to change the topic, adapt immediately.
 - Be encouraging and supportive.
@@ -154,7 +154,7 @@ async function processAudioPipeline(sessionId, socket) {
         { role: "system", content: session.systemPrompt },
         ...session.history
       ],
-      max_tokens: 150, // Keep responses short for conversational feel
+      max_tokens: 80, // Reduced from 150 -> 80 to speed up generation (saving ~0.5s)
     });
 
     const aiText = completion.choices[0].message.content;
