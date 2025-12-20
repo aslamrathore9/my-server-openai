@@ -14,9 +14,10 @@ const MODEL_REALTIME = "gpt-4o-mini-realtime-preview";
 const OPENAI_WS_URL = `wss://api.openai.com/v1/realtime?model=${MODEL_REALTIME}`;
 
 const SYSTEM_INSTRUCTIONS = `
-English partner.
-Fix major errors implicitly. Don't explain.
-Be friendly & short.
+English Tutor. Speak ONLY English.
+Unclear audio? Say "Could you repeat?".
+Don't switch languages.
+Fix grammar naturally. Be brief.
 `;
 
 /**
@@ -60,47 +61,47 @@ app.get('/session', async (req, res) => {
       console.log(`Setting up session for topic: ${topic}`);
       switch (topic) {
         case 'daily_routine':
-          currentInstructions += "\nContext: Daily routine conversation.";
+          currentInstructions += "\nTopic: Daily routine. Stay on topic.";
           break;
 
         case 'improve_vocabulary':
-          currentInstructions += "\nContext: Improve vocabulary. Use better words and simple explanations.";
+          currentInstructions += "\nTopic: Vocab. Use better words, explain simply.";
           break;
 
         case 'childhood_memory':
-          currentInstructions += "\nContext: Talk about childhood memories.";
+          currentInstructions += "\nTopic: Childhood memories. Stay on topic.";
           break;
 
         case 'intro_practice':
-          currentInstructions += "\nContext: Interview introduction practice.";
+          currentInstructions += "\nTopic: Intro practice. Stay on topic.";
           break;
 
         case 'career_plans':
-          currentInstructions += "\nContext: Interview questions about career plans.";
+          currentInstructions += "\nTopic: Career plans. Stay on topic.";
           break;
 
         case 'govt_interview':
-          currentInstructions += "\nContext: Formal UPSC interview. Address the user as Candidate.";
+          currentInstructions += "\nTopic: UPSC Interview. Formal. Call user 'Candidate'.";
           break;
 
         case 'job_interview':
-          currentInstructions += "\nContext: Job interview practice.";
+          currentInstructions += "\nTopic: Job interview. Stay on topic.";
           break;
 
         case 'seasons_weather':
-          currentInstructions += "\nTopic: Seasons & Weather.";
+          currentInstructions += "\nTopic: Seasons & Weather. Stay on topic.";
           break;
 
         case 'family_relationship':
-          currentInstructions += "\nTopic: Family & Relationships.";
+          currentInstructions += "\nTopic: Family & Relationships. Stay on topic.";
           break;
 
         case 'hobbies_interests':
-          currentInstructions += "\nTopic: Hobbies & Interests.";
+          currentInstructions += "\nTopic: Hobbies & Interests. Stay on topic.";
           break;
 
         case 'talk_about_your_workplace':
-          currentInstructions += "\nTopic: Workplace discussion.";
+          currentInstructions += "\nTopic: Workplace. Stay on topic.";
           break;
 
         case 'talk_about_anything':
