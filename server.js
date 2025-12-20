@@ -12,15 +12,6 @@ dotenv.config();
 const PORT = process.env.PORT || 3000;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-// API Configuration
-const GPT_MODEL = "gpt-4o-mini";
-const TTS_MODEL = "tts-1";
-const TTS_VOICE = "alloy"; // alloy, echo, fable, onyx, nova, shimmer
-
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
-const app = express();
-const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
 
 // ==========================================
 // SESSION STATE
