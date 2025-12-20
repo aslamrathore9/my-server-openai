@@ -29,8 +29,8 @@ const wss = new WebSocketServer({ server });
 const sessions = new Map();
 
 // VAD Constants (Simple Energy based)
-const VAD_THRESHOLD = 0.05;      // Increased to 0.05 to ignore background noise/breathing
-const SILENCE_DURATION_MS = 1500; // Increased to 1.5s to ensure user is really finished
+const VAD_THRESHOLD = 0.02;      // Lowered to 0.02 (0.05 was too deaf)
+const SILENCE_DURATION_MS = 1200; // 1.2s silence detection
 const MAX_RECORDING_MS = 15000;   // Force process after 15s to avoid huge buffers
 
 // ==========================================
