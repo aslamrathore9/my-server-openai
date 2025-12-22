@@ -116,12 +116,11 @@ async function processAudioPipeline(sessionId, socket) {
   const session = sessions.get(sessionId);
   if (!session || session.audioBuffer.length === 0) return;
 
-  // 1. Prepare Audio
+  // 1. Prepare Audio (WAV from PCM)
   console.log(`[${sessionId}] Processing Audio Pipeline...`);
   const audioData = Buffer.concat(session.audioBuffer);
   session.audioBuffer = []; // Clear buffer immediately
 
-  // Create WAV file from PCM data
   const wavFile = await OpenAI.toFile(createWavBuffer(audioData, 16000), "input.wav");
 
   try {
@@ -137,71 +136,91 @@ async function processAudioPipeline(sessionId, socket) {
     console.log(`[${sessionId}] User said: "${userText}"`);
 
     if (!userText || userText.length < 2) {
-      console.log(`[${sessionId}] Transcription empty or too short. Ignoring.`);
+      console.log(`[${sessionId}] Transcription empty/short. Ignoring.`);
       return;
     }
 
-    // Send 'speaking' event to client so they know we heard them
+    // Notify client: Thinking with user text
     socket.send(JSON.stringify({ type: "assistant.thinking", text: userText }));
-
-    // 3. Intelligence (LLM) - GPT-4o-mini
     session.history.push({ role: "user", content: userText });
 
-    console.log(`[${sessionId}] Generating response...`);
-    const completion = await openai.chat.completions.create({
+    // 3. Streaming Intelligence (LLM) & TTS
+    console.log(`[${sessionId}] Starting Stream...`);
+
+    const stream = await openai.chat.completions.create({
       model: GPT_MODEL,
       messages: [
         { role: "system", content: session.systemPrompt },
         ...session.history
       ],
-      max_tokens: 80, // Reduced from 150 -> 80 to speed up generation (saving ~0.5s)
+      max_tokens: 150, // Increase slightly for streaming (sentences)
+      stream: true,
     });
 
-    const aiText = completion.choices[0].message.content;
-    session.history.push({ role: "assistant", content: aiText });
-    console.log(`[${sessionId}] AI response: "${aiText}"`);
+    let fullText = "";
+    let sentenceBuffer = "";
+    let isFirstAudioChunk = true;
+    session.isAiSpeaking = true; // Gate early
 
-    // Send text to client immediately (for UI)
-    socket.send(JSON.stringify({ type: "assistant.response.text", text: aiText }));
+    // Regex to split sentences (., !, ?, or newlines)
+    // We want to capture the delimiter too.
+    const sentenceDelimiters = /[.!?\n]+/;
 
-    // 4. Voice (TTS)
-    console.log(`[${sessionId}] Generating audio...`);
-    const mp3Response = await openai.audio.speech.create({
-      model: TTS_MODEL,
-      voice: TTS_VOICE,
-      input: aiText,
-      response_format: "pcm" // We want raw PCM for easier streaming/playback if possible, but 'pcm' isn't standard in Node SDK?
-      // Actually openai.audio.speech supports 'pcm' (raw 16-bit 24kHz pcm).
-      // Let's verify documentation memory... yes, 'pcm' is supported.
-    });
+    for await (const chunk of stream) {
+      if (session.isSpeaking) {
+        // Barge-in detected (User started speaking again), abort stream?
+        // For complexity, let's just finish current logic or check flag
+        // Ideally breaks, but let's let it flow for now or implement break
+      }
 
-    const audioBuffer = Buffer.from(await mp3Response.arrayBuffer());
+      const content = chunk.choices[0]?.delta?.content || "";
+      if (!content) continue;
 
-    // 5. Stream Audio Back
-    console.log(`[${sessionId}] Sending ${audioBuffer.length} bytes of audio.`);
+      fullText += content;
+      sentenceBuffer += content;
 
-    // Send a header or just raw data. Let's send a JSON header first, then binary.
-    // Actually, to keep it simple, let's send binary frames with a custom prefix or just pure binary if we control the protocol.
-    // Better: Send a JSON message saying "Incoming Audio", then send binary chunks.
-    // OR: Interleave.
-    // Simple approach: Send JSON message "audio_start", then binary, then "audio_end".
+      // Check for sentence completion
+      // We look for a delimiter followed by space or end of string logic (but here purely distinct chars)
+      // Simple heuristic: If buffer contains a delimiter, split and process
 
-    socket.send(JSON.stringify({ type: "assistant.audio.start" }));
+      let match = sentenceBuffer.match(sentenceDelimiters);
+      if (match) {
+        // Found a sentence end.
+        // It's possible we have "Hello! How are..."
+        // We want to take "Hello!" and leave " How are..."
 
-    // Gate: Mark AI as speaking so we ignore incoming echoed audio
-    session.isAiSpeaking = true;
+        const delimiterIndex = match.index + match[0].length;
+        const completeSentence = sentenceBuffer.substring(0, delimiterIndex);
+        const remaining = sentenceBuffer.substring(delimiterIndex);
 
-    // Chunking the response to simulate valid streaming if needed, or just send it all.
-    // Sending in 4kb chunks
-    const CHUNK_SIZE = 4096;
-    for (let i = 0; i < audioBuffer.length; i += CHUNK_SIZE) {
-      const chunk = audioBuffer.subarray(i, i + CHUNK_SIZE);
-      socket.send(chunk);
+        if (completeSentence.trim().length > 0) {
+          console.log(`[${sessionId}] Sentence Ready: "${completeSentence.trim()}"`);
+
+          // Send full text update for UI
+          socket.send(JSON.stringify({ type: "assistant.response.text", text: fullText }));
+
+          // Generate TTS for this sentence
+          await generateAndStreamTTS(sessionId, socket, completeSentence, isFirstAudioChunk);
+          isFirstAudioChunk = false;
+        }
+
+        sentenceBuffer = remaining;
+      }
     }
+
+    // Process remaining buffer (last sentence, maybe no punctuation)
+    if (sentenceBuffer.trim().length > 0) {
+      console.log(`[${sessionId}] Final Sentence: "${sentenceBuffer.trim()}"`);
+      socket.send(JSON.stringify({ type: "assistant.response.text", text: fullText }));
+      await generateAndStreamTTS(sessionId, socket, sentenceBuffer, isFirstAudioChunk);
+    }
+
+    // stream finished
+    session.history.push({ role: "assistant", content: fullText });
+    console.log(`[${sessionId}] Stream Complete. Full response: "${fullText}"`);
 
     socket.send(JSON.stringify({ type: "assistant.audio.end" }));
 
-    // Gate: Unmark AI speaking (allow some buffer for playback to finish on client?)
     setTimeout(() => {
       session.isAiSpeaking = false;
     }, 500);
@@ -209,6 +228,36 @@ async function processAudioPipeline(sessionId, socket) {
   } catch (error) {
     console.error(`[${sessionId}] Pipeline Error:`, error);
     socket.send(JSON.stringify({ type: "error", message: "Processing failed" }));
+    session.isAiSpeaking = false;
+  }
+}
+
+async function generateAndStreamTTS(sessionId, socket, text, isFirst) {
+  try {
+    const mp3Response = await openai.audio.speech.create({
+      model: TTS_MODEL,
+      voice: TTS_VOICE,
+      input: text,
+      response_format: "pcm"
+    });
+    const audioBuffer = Buffer.from(await mp3Response.arrayBuffer());
+
+    if (isFirst) {
+      socket.send(JSON.stringify({ type: "assistant.audio.start" }));
+    }
+
+    console.log(`[${sessionId}] Streaming TTS (${audioBuffer.length} bytes)`);
+
+    // Send in chunks to avoid overwhelming socket?
+    // 4KB chunks is standard
+    const CHUNK_SIZE = 4096;
+    for (let i = 0; i < audioBuffer.length; i += CHUNK_SIZE) {
+      const chunk = audioBuffer.subarray(i, i + CHUNK_SIZE);
+      socket.send(chunk);
+    }
+
+  } catch (e) {
+    console.error(`[${sessionId}] TTS Error for "${text}":`, e);
   }
 }
 
