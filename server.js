@@ -339,34 +339,12 @@ wss.on('connection', (ws, req) => {
             session.systemPrompt = BASE_SYSTEM_PROMPT + `\nThe current topic is: ${data.topic}`;
           }
         } else if (data.type === 'greeting') {
-           // ... (existing greeting logic)
-           console.log(`[${sessionId}] Generating greeting...`);
-           // ... (rest of greeting logic)
-           session.history.push({ role: "user", content: "Hello, I am ready to start." });
-           // ... (rest of logic)
+          // Generate initial greeting
+          console.log(`[${sessionId}] Generating greeting...`);
 
-        } else if (data.type === 'request_hint') {
-           console.log(`[${sessionId}] Generating hint...`);
+          // Mock a user "hello" to get things started
+          session.history.push({ role: "user", content: "Hello, I am ready to start." });
 
-           try {
-               const completion = await openai.chat.completions.create({
-                   model: GPT_MODEL,
-                   messages: [
-                       { role: "system", content: session.systemPrompt + "\n\nProvide 1 short, simple sentence the user could say next to continue the conversation naturally. Do not start with 'You could say'. Just the sentence." },
-                       ...session.history
-                   ],
-                   max_tokens: 50,
-               });
-
-               const hintText = completion.choices[0]?.message?.content?.trim() || "Tell me more about that.";
-               console.log(`[${sessionId}] Hint: "${hintText}"`);
-
-               ws.send(JSON.stringify({ type: "hint", suggestion: hintText }));
-
-           } catch (e) {
-               console.error(`[${sessionId}] Hint Error:`, e);
-           }
-        }
           const completion = await openai.chat.completions.create({
             model: GPT_MODEL,
             messages: [
@@ -375,6 +353,7 @@ wss.on('connection', (ws, req) => {
             ],
             max_tokens: 100,
           });
+
           const aiText = completion.choices[0].message.content;
           session.history.push({ role: "assistant", content: aiText });
 
@@ -387,9 +366,30 @@ wss.on('connection', (ws, req) => {
 
           ws.send(JSON.stringify({ type: "assistant.audio.start" }));
           session.isAiSpeaking = true;
-          ws.send(buffer); // Send all at once or chunk
+          ws.send(buffer);
           ws.send(JSON.stringify({ type: "assistant.audio.end" }));
           setTimeout(() => { session.isAiSpeaking = false; }, 500);
+
+        } else if (data.type === 'request_hint') {
+          console.log(`[${sessionId}] Generating hint...`);
+          try {
+            const completion = await openai.chat.completions.create({
+              model: GPT_MODEL,
+              messages: [
+                { role: "system", content: session.systemPrompt + "\n\nProvide 1 short, simple sentence the user could say next to continue the conversation naturally. Do not start with 'You could say'. Just the sentence." },
+                ...session.history
+              ],
+              max_tokens: 50,
+            });
+
+            const hintText = completion.choices[0]?.message?.content?.trim() || "Tell me more about that.";
+            console.log(`[${sessionId}] Hint: "${hintText}"`);
+
+            ws.send(JSON.stringify({ type: "hint", suggestion: hintText }));
+
+          } catch (e) {
+            console.error(`[${sessionId}] Hint Error:`, e);
+          }
         }
 
       } catch (e) {
