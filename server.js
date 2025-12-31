@@ -339,12 +339,34 @@ wss.on('connection', (ws, req) => {
             session.systemPrompt = BASE_SYSTEM_PROMPT + `\nThe current topic is: ${data.topic}`;
           }
         } else if (data.type === 'greeting') {
-          // Generate initial greeting
-          console.log(`[${sessionId}] Generating greeting...`);
-          // Mock a user "hello" to get things started or just prompt the LLM
-          session.history.push({ role: "user", content: "Hello, I am ready to start." });
+           // ... (existing greeting logic)
+           console.log(`[${sessionId}] Generating greeting...`);
+           // ... (rest of greeting logic)
+           session.history.push({ role: "user", content: "Hello, I am ready to start." });
+           // ... (rest of logic)
 
-          // Run pipeline logic partially? No, let's just do a direct completion call
+        } else if (data.type === 'request_hint') {
+           console.log(`[${sessionId}] Generating hint...`);
+
+           try {
+               const completion = await openai.chat.completions.create({
+                   model: GPT_MODEL,
+                   messages: [
+                       { role: "system", content: session.systemPrompt + "\n\nProvide 1 short, simple sentence the user could say next to continue the conversation naturally. Do not start with 'You could say'. Just the sentence." },
+                       ...session.history
+                   ],
+                   max_tokens: 50,
+               });
+
+               const hintText = completion.choices[0]?.message?.content?.trim() || "Tell me more about that.";
+               console.log(`[${sessionId}] Hint: "${hintText}"`);
+
+               ws.send(JSON.stringify({ type: "hint", suggestion: hintText }));
+
+           } catch (e) {
+               console.error(`[${sessionId}] Hint Error:`, e);
+           }
+        }
           const completion = await openai.chat.completions.create({
             model: GPT_MODEL,
             messages: [
